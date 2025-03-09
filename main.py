@@ -1,6 +1,8 @@
 import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackContext, \
+    CallbackQueryHandler
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -45,11 +47,87 @@ async def start(update: Update, context: CallbackContext):
     username = update.message.from_user.username
     cursor.execute('INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)', (user_id, username))
     conn.commit()
-    await update.message.reply_text("Добро пожаловать! Выберите тариф или отправьте чек об оплате.")
 
+    # Проверяем, есть ли пользователь в базе данных
+    cursor.execute('SELECT paid, tariff, start_date, last_lesson FROM users WHERE user_id = ?', (user_id,))
+    user_data = cursor.fetchone()
+
+    if not user_data or not user_data[0]:  # Если не оплачено
+        keyboard = [
+            [InlineKeyboardButton("Выбрать тариф", callback_data='choose_tariff')],
+            [InlineKeyboardButton("Отправить чек об оплате", callback_data='send_payment')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Добро пожаловать! Выберите тариф или отправьте чек об оплате.", reply_markup=reply_markup)
+    else:
+        paid, tariff, start_date_str, last_lesson = user_data
+
+        if start_date_str is None or start_date_str == "":
+            start_date = datetime.now().strftime('%Y-%m-%d')
+            cursor.execute('UPDATE users SET start_date = ? WHERE user_id = ?', (start_date, user_id))
+            conn.commit()
+        else:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+            except ValueError:
+                start_date = datetime.now().strftime('%Y-%m-%d')
+                cursor.execute('UPDATE users SET start_date = ? WHERE user_id = ?', (start_date, user_id))
+                conn.commit()
+
+        days_passed = (datetime.now() - start_date).days
+        available_lesson = min(days_passed // 3 + 1, 11)
+
+        if last_lesson < available_lesson:
+            keyboard = [
+                [InlineKeyboardButton("Получить новый урок", callback_data='get_lesson')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(f"У вас доступен новый урок {available_lesson}. Нажмите кнопку для получения урока.", reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(f"Вы уже получили доступ к текущему уроку {last_lesson}.")
+
+        if tariff == "С проверкой д/з" or tariff == "Личное сопровождение":
+            await update.message.reply_text("Вы можете отправить домашнее задание. Просто загрузите фото с выполненным заданием.")
+
+        if tariff == "Личное сопровождение":
+            await update.message.reply_text("Вы записаны на личную консультацию. Используйте команду /support для записи на консультацию.")
 # Выбор тарифа
+
 async def choose_tariff(update: Update, context: CallbackContext):
-    await update.message.reply_text("Выберите тариф:\n1. Без проверки д/з - 3000 р.\n2. С проверкой д/з - 5000 р.\n3. Личное сопровождение - 12000 р.")
+    keyboard = [
+        [InlineKeyboardButton("Без проверки д/з - 3000 р.", callback_data='tariff_роза')],
+        [InlineKeyboardButton("С проверкой д/з - 5000 р.", callback_data='tariff_фиалка')],
+        [InlineKeyboardButton("Личное сопровождение - 12000 р.", callback_data='tariff_лепесток')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Выберите тариф:", reply_markup=reply_markup)
+
+# Обработка нажатий на кнопки
+async def button(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    action = query.data
+
+    if action == 'choose_tariff':
+        await choose_tariff(query, context)
+    elif action.startswith('tariff_'):
+        tariff_code = action.split('_')[1]
+        if tariff_code in CODE_WORDS:
+            tariff = CODE_WORDS[tariff_code]
+            cursor.execute('UPDATE users SET paid = TRUE, start_date = ?, tariff = ? WHERE user_id = ?',
+                           (datetime.now().strftime('%Y-%m-%d'), tariff, user_id))
+            conn.commit()
+            await query.edit_message_text(text=f"Оплата принята! Вы выбрали тариф '{tariff}'. Вы можете начать обучение.")
+        else:
+            await query.edit_message_text(text="Неверный выбор. Пожалуйста, попробуйте снова.")
+    elif action == 'send_payment':
+        await query.edit_message_text(text="Пожалуйста, отправьте чек об оплате.")
+    elif action == 'get_lesson':
+        await lessons(query, context)
+
+
 
 # Обработка кодовых слов
 async def handle_message(update: Update, context: CallbackContext):
@@ -128,7 +206,7 @@ async def personal_support(update: Update, context: CallbackContext):
 
 # Основная функция
 if __name__ == '__main__':
-    application = ApplicationBuilder().token('').build()
+    application = ApplicationBuilder().token(telegram_bot_token).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("lessons", lessons))
@@ -136,5 +214,9 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("support", personal_support))
     application.add_handler(MessageHandler(filters.PHOTO, homework))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+
+    # Добавьте обработчик для кнопок
+    application.add_handler(CallbackQueryHandler(button))
+
 
     application.run_polling()
