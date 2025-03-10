@@ -57,7 +57,9 @@ try:
         penalty_task TEXT,
         main_last_message_id INTEGER,
         auxiliary_last_message_id INTEGER
-        preliminary_material_index INTEGER DEFAULT 0
+        preliminary_material_index INTEGER DEFAULT 0,
+        main_tariff TEXT,
+        auxiliary_tariff TEXT
     );
 
     CREATE TABLE IF NOT EXISTS homeworks (
@@ -929,9 +931,9 @@ async def show_homework(update: Update, context: CallbackContext):
 
 async def show_tariffs(update: Update, context: CallbackContext):
     keyboard = [
-        [InlineKeyboardButton("💰 Без проверки ДЗ - 3000 р.", callback_data='tariff_роза')],
-        [InlineKeyboardButton("📚 С проверкой ДЗ - 5000 р.", callback_data='tariff_фиалка')],
-        [InlineKeyboardButton("🌟 Премиум (личный куратор) - 12000 р.", callback_data='tariff_лепесток')]
+        [InlineKeyboardButton("💰 Без проверки ДЗ - 3000 р.", callback_data='tariff_main_course_роза')],
+        [InlineKeyboardButton("📚 С проверкой ДЗ - 5000 р.", callback_data='tariff_main_course_фиалка')],
+        [InlineKeyboardButton("🌟 Премиум (личный куратор) - 12000 р.", callback_data='tariff_main_course_лепесток')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.callback_query.message.reply_text("Выберите тариф:", reply_markup=reply_markup)
@@ -1065,7 +1067,6 @@ async def show_admin_menu(update: Update, context: CallbackContext):
 # Функция для выбора тарифа
 async def choose_tariff(update: Update, context: CallbackContext, course_type: str, course: str):
     query = update.callback_query
-    print('choose_tariff')
     await query.answer()
 
     # Создаем кнопки для выбора тарифа
@@ -1117,7 +1118,7 @@ async def handle_tariff_selection(update: Update, context: CallbackContext):
         ''', (course, user_id))
         conn.commit()
 
-        # Отправляем инструкции по оплате
+        # Отправляем инструкции по оплате пользователю
         keyboard = [
             [InlineKeyboardButton("Оплачено", callback_data=f'payment_done_{course_type}_{tariff_code}')]
         ]
@@ -1127,6 +1128,26 @@ async def handle_tariff_selection(update: Update, context: CallbackContext):
             f"Для оплаты тарифа '{tariff_type}' переведите сумму на номер +7 952 551 5554 (Сбербанк).\n"
             "После оплаты нажмите кнопку 'Оплачено'.",
             reply_markup=reply_markup
+        )
+
+        # Отправляем запрос администраторам
+        admin_chat_id = ADMIN_GROUP_ID
+        user_info = await context.bot.get_chat(user_id)
+        full_name = user_info.full_name
+
+        admin_keyboard = [
+            [InlineKeyboardButton("Подтвердить", callback_data=f'confirm_payment_{user_id}_{course_type}_{tariff_code}')],
+            [InlineKeyboardButton("Отклонить", callback_data=f'reject_payment_{user_id}_{course_type}_{tariff_code}')]
+        ]
+        admin_reply_markup = InlineKeyboardMarkup(admin_keyboard)
+
+        await context.bot.send_message(
+            chat_id=admin_chat_id,
+            text=f"Запрос на подтверждение оплаты:\n"
+                 f"Пользователь: {full_name}\n"
+                 f"Курс: {course_type}\n"
+                 f"Тариф: {tariff_type}",
+            reply_markup=admin_reply_markup
         )
 
     except Exception as e:
@@ -1142,14 +1163,15 @@ async def confirm_payment(update: Update, context: CallbackContext):
 
     # Получаем данные из CODE_WORDS
     course_type_full, course, tariff_type = CODE_WORDS.get(tariff_code, ("unknown", "unknown", "Неизвестный тариф"))
+    tariff_field = f"{course_type_full.split('_')[0]}_paid"
 
     # Обновляем статус оплаты в базе данных
     cursor.execute(f'''
         UPDATE users 
-        SET {course_type}_paid = TRUE, 
-            {course_type}_tariff = ? 
+        SET {tariff_field} = TRUE, 
+            {course_type_full} = ? 
         WHERE user_id = ?
-    ''', (tariff_type, user_id))
+    ''', (course, user_id))
     conn.commit()
 
     # Уведомляем пользователя
@@ -1170,12 +1192,13 @@ async def reject_payment(update: Update, context: CallbackContext):
 
     # Получаем данные из CODE_WORDS
     course_type_full, course, tariff_type = CODE_WORDS.get(tariff_code, ("unknown", "unknown", "Неизвестный тариф"))
+    tariff_field = f"{course_type_full.split('_')[0]}_paid"
 
     # Обновляем статус оплаты в базе данных
     cursor.execute(f'''
         UPDATE users 
-        SET {course_type}_paid = FALSE, 
-            {course_type}_tariff = NULL 
+        SET {tariff_field} = FALSE, 
+            {course_type_full} = NULL 
         WHERE user_id = ?
     ''', (user_id,))
     conn.commit()
