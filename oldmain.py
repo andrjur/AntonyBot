@@ -53,7 +53,7 @@ TARGET_USER_ID = 954230772  # Замените на ваш user_id
 
 def get_lesson_text(lesson_number):
     try:
-        with open(f'lessons/lesson{lesson_number}.txt', 'r', encoding='utf-8') as file:
+        with open(f'courses/lessons/lesson{lesson_number}.txt', 'r', encoding='utf-8') as file:
             return file.read()
     except FileNotFoundError:
         return "Урок не найден."
