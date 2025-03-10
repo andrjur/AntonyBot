@@ -143,10 +143,13 @@ async def button(update: Update, context: CallbackContext) -> None:
     elif action == 'send_payment':
         await query.edit_message_text("Пришлите скрин чека об оплате")
     elif action == 'get_lesson':
-        await lessons(query, context)
+        await lessons(update.callback_query, context)
+
+
     elif action.startswith('next_lesson_'):
         lesson_number = int(action.split('_')[2])
-        await lessons(update, context, lesson_number)
+        await lessons(update.callback_query, context, lesson_number)
+
     elif action == 'settings':
         await query.edit_message_text("Настройки (функция в разработке)")
     elif action == 'upgrade_tariff':
@@ -158,12 +161,16 @@ async def button(update: Update, context: CallbackContext) -> None:
 
 
 async def lessons(update: Update, context: CallbackContext, lesson_number=None):
-    user_id = update.effective_user.id
+    if isinstance(update, Update):  # Если lessons вызвана через команду
+        user_id = update.effective_user.id
+    else:  # Если lessons вызвана через CallbackQuery
+        user_id = update.from_user.id
+
     cursor.execute('SELECT paid, last_lesson FROM users WHERE user_id = ?', (user_id,))
     user_data = cursor.fetchone()
 
     if not user_data or not user_data[0]:
-        await update.message.reply_text("Пожалуйста, оплатите доступ к урокам.")
+        await context.bot.send_message(chat_id=user_id, text="Пожалуйста, оплатите доступ к урокам.")  # Используем context.bot
         return
 
     current_lesson = user_data[1] if user_data[1] else 0
@@ -173,8 +180,22 @@ async def lessons(update: Update, context: CallbackContext, lesson_number=None):
         next_lesson = current_lesson + 1
 
     if next_lesson > 11:
-        await update.message.reply_text("Вы завершили все уроки!")
+        await context.bot.send_message(chat_id=user_id, text="Вы завершили все уроки!")  # Используем context.bot
         return
+
+    lesson_text = get_lesson_text(next_lesson)
+    keyboard = [
+        [InlineKeyboardButton("Следующий урок", callback_data=f'next_lesson_{next_lesson + 1}')],
+        [InlineKeyboardButton("Настройки", callback_data='settings')],
+        [InlineKeyboardButton("Повысить тариф", callback_data='upgrade_tariff')],
+        [InlineKeyboardButton("Заказать консультацию", callback_data='consultation')],
+        [InlineKeyboardButton("Случайный анекдот", callback_data='random_joke')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await context.bot.send_message(chat_id=user_id, text=lesson_text, reply_markup=reply_markup)  # Используем context.bot
+    cursor.execute('UPDATE users SET last_lesson = ? WHERE user_id = ?', (next_lesson, user_id))
+    conn.commit()
 
     lesson_text = get_lesson_text(next_lesson)
     keyboard = [
