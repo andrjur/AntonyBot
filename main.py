@@ -161,10 +161,6 @@ async def handle_code_words(update: Update, context: CallbackContext):
 
     await update.message.reply_text("Неверное кодовое слово.")
 
-import os
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler
-
 # Функция для получения предварительных материалов
 def get_preliminary_materials(course, next_lesson):
     """
@@ -756,7 +752,6 @@ async def button_handler(update: Update, context: CallbackContext):
         await show_gallery(update, context)
     elif data == 'support':
         await request_support(update, context)
-
     elif data.startswith('admin'):
         data_split = data.split('_')
         if len(data_split) > 1:
@@ -772,16 +767,13 @@ async def button_handler(update: Update, context: CallbackContext):
         await show_homework(update, context)
     elif data.startswith('repeat_lesson_'):
         lesson_number = int(data.split('_')[2])
-        # Получаем информацию о пользователе
         user_id = update.effective_user.id
         cursor.execute('SELECT main_course, auxiliary_course FROM users WHERE user_id = ?', (user_id,))
         main_course, auxiliary_course = cursor.fetchone()
-
-        # Определяем тип курса
         course_type = 'main_course' if main_course else 'auxiliary_course'
-
-        # Вызываем функцию send_lesson для повторной отправки урока
         await send_lesson(update, context, update.effective_user, course_type, lesson_number=lesson_number)
+    elif data.startswith('tariff_'):  # Обработка выбора тарифа
+        await handle_tariff_selection(update, context)
 
 async def handle_admin_approval(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -937,11 +929,12 @@ async def show_homework(update: Update, context: CallbackContext):
 
 async def show_tariffs(update: Update, context: CallbackContext):
     keyboard = [
-        [InlineKeyboardButton("💰 Без проверки ДЗ", callback_data='tariff_no_check')],
-        [InlineKeyboardButton("📚 С проверкой ДЗ", callback_data='tariff_with_check')],
-        [InlineKeyboardButton("🌟 Премиум (личный куратор)", callback_data='tariff_premium')]
+        [InlineKeyboardButton("💰 Без проверки ДЗ - 3000 р.", callback_data='tariff_роза')],
+        [InlineKeyboardButton("📚 С проверкой ДЗ - 5000 р.", callback_data='tariff_фиалка')],
+        [InlineKeyboardButton("🌟 Премиум (личный куратор) - 12000 р.", callback_data='tariff_лепесток')]
     ]
-    await update.callback_query.message.reply_text("Выберите тариф:", reply_markup=InlineKeyboardMarkup(keyboard))
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.message.reply_text("Выберите тариф:", reply_markup=reply_markup)
 
 async def request_homework(update: Update, context: CallbackContext):
     await update.callback_query.message.reply_text("Отправьте фото вашего домашнего задания:")
@@ -1091,60 +1084,64 @@ async def choose_tariff(update: Update, context: CallbackContext, course_type: s
 #===========================================================
 
 async def handle_tariff_selection(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+    print('handle_tariff_selection:', query.data)  # Отладочный вывод
+
     user_id = update.effective_user.id
-    print('handle_tariff_selection')
-    # Проверяем, был ли выбор тарифа через кнопку или текстовое сообщение
-    if update.callback_query:
-        query = update.callback_query
-        print(f'{query=}')
-        await query.answer()
 
-        _, course_type, tariff_code = query.data.split('_')
-    else:
-        # Если пользователь ввел текстовое сообщение (кодовое слово)
-        text = update.message.text.lower()
-        course_type = 'main_course'  # Предполагаем, что кодовые слова относятся к основному курсу
-        tariff_code = text
-        print(f'{text=}')
+    try:
+        # Разбиваем callback_data на части
+        parts = query.data.split('_')
+        if len(parts) != 3:
+            await query.message.reply_text("Ошибка: Некорректный формат данных.")
+            return
 
-    # Определяем название тарифа
-    if tariff_code in CODE_WORDS:
-        tariff = CODE_WORDS[tariff_code]
-    else:
-        await update.message.reply_text("Неверный выбор тарифа.")
-        return
+        _, course_type, tariff_code = parts
+        print(f"Extracted parts: course_type={course_type}, tariff_code={tariff_code}")
 
-    # Обновляем статус пользователя на "проверка оплаты"
-    cursor.execute(f'''
-        UPDATE users 
-        SET {course_type}_tariff = ?, 
-            {course_type}_paid = 'pending' 
-        WHERE user_id = ?
-    ''', (tariff, user_id))
-    conn.commit()
+        # Проверяем, существует ли tariff_code в CODE_WORDS
+        if tariff_code not in CODE_WORDS:
+            await query.message.reply_text(f"Неверный выбор тарифа. Получен tariff_code: {tariff_code}")
+            return
 
-    # Отправляем инструкции по оплате
-    keyboard = [
-        [InlineKeyboardButton("Оплачено", callback_data=f'payment_done_{course_type}_{tariff_code}')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+        # Получаем данные из CODE_WORDS
+        course_type_full, course, tariff_type = CODE_WORDS[tariff_code]
+        tariff_field = f"{course_type_full.split('_')[0]}_paid"  # Например, main_paid или auxiliary_paid
 
-    await update.message.reply_text(
-        f"Для оплаты тарифа '{tariff}' переведите сумму на номер +7 952 551 5554 (Сбербанк).\n"
-        "После оплаты нажмите кнопку 'Оплачено'.",
-        reply_markup=reply_markup
-    )
+        # Обновляем данные пользователя в базе данных
+        cursor.execute(f'''
+            UPDATE users 
+            SET {course_type_full} = ?, {tariff_field} = 'pending' 
+            WHERE user_id = ?
+        ''', (course, user_id))
+        conn.commit()
+
+        # Отправляем инструкции по оплате
+        keyboard = [
+            [InlineKeyboardButton("Оплачено", callback_data=f'payment_done_{course_type}_{tariff_code}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.message.reply_text(
+            f"Для оплаты тарифа '{tariff_type}' переведите сумму на номер +7 952 551 5554 (Сбербанк).\n"
+            "После оплаты нажмите кнопку 'Оплачено'.",
+            reply_markup=reply_markup
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке выбора тарифа: {e}")
+        await query.message.reply_text("Произошла ошибка. Попробуйте снова.")
 
 async def confirm_payment(update: Update, context: CallbackContext):
     query = update.callback_query
-    print('confirm_payment')
     await query.answer()
 
     _, user_id, course_type, tariff_code = query.data.split('_')
     user_id = int(user_id)
 
-    # Определяем название тарифа
-    tariff = CODE_WORDS.get(tariff_code, "Неизвестный тариф")
+    # Получаем данные из CODE_WORDS
+    course_type_full, course, tariff_type = CODE_WORDS.get(tariff_code, ("unknown", "unknown", "Неизвестный тариф"))
 
     # Обновляем статус оплаты в базе данных
     cursor.execute(f'''
@@ -1152,13 +1149,13 @@ async def confirm_payment(update: Update, context: CallbackContext):
         SET {course_type}_paid = TRUE, 
             {course_type}_tariff = ? 
         WHERE user_id = ?
-    ''', (tariff, user_id))
+    ''', (tariff_type, user_id))
     conn.commit()
 
     # Уведомляем пользователя
     await context.bot.send_message(
         chat_id=user_id,
-        text=f"Ваша оплата тарифа '{tariff}' подтверждена. Доступ к курсу открыт."
+        text=f"Ваша оплата тарифа '{tariff_type}' подтверждена. Доступ к курсу открыт."
     )
 
     # Уведомляем администраторов
@@ -1171,8 +1168,8 @@ async def reject_payment(update: Update, context: CallbackContext):
     _, user_id, course_type, tariff_code = query.data.split('_')
     user_id = int(user_id)
 
-    # Определяем название тарифа
-    tariff = CODE_WORDS.get(tariff_code, "Неизвестный тариф")
+    # Получаем данные из CODE_WORDS
+    course_type_full, course, tariff_type = CODE_WORDS.get(tariff_code, ("unknown", "unknown", "Неизвестный тариф"))
 
     # Обновляем статус оплаты в базе данных
     cursor.execute(f'''
@@ -1186,7 +1183,7 @@ async def reject_payment(update: Update, context: CallbackContext):
     # Уведомляем пользователя
     await context.bot.send_message(
         chat_id=user_id,
-        text=f"Ваша оплата тарифа '{tariff}' отклонена. Пожалуйста, свяжитесь с поддержкой."
+        text=f"Ваша оплата тарифа '{tariff_type}' отклонена. Пожалуйста, свяжитесь с поддержкой."
     )
 
     # Уведомляем администраторов
