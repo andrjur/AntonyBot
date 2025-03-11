@@ -9,6 +9,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
+import re
+
 
 
 # Настройка логирования
@@ -36,8 +38,11 @@ CODE_WORDS = {
     "молоко": ("auxiliary_course", "autogenic", "premium")
 }
 
+# Регулярное выражение для извлечения времени задержки из имени файла
+DELAY_PATTERN = re.compile(r"_(\d+)([mh])$")
+
 # Интервал между уроками по умолчанию (в часах)
-DEFAULT_LESSON_INTERVAL = 72
+DEFAULT_LESSON_INTERVAL = 0.04
 
 # if not os.access('bot_db.sqlite', os.W_OK):
 #     logger.critical("Нет прав на запись в файл базы данных!")
@@ -222,34 +227,34 @@ async def show_admin_menu(update: Update, context: CallbackContext):
 
 async def show_main_menu(update: Update, context: CallbackContext):
     user = update.effective_user
+    message = update.effective_message  # Используем effective_message вместо message
+
     cursor.execute('SELECT main_course, auxiliary_course, main_current_lesson FROM users WHERE user_id = ?', (user.id,))
-    main_course, auxiliary_course, main_current_lesson = cursor.fetchone()
+    user_data = cursor.fetchone()
 
-    if main_course or auxiliary_course:
-        # Показываем обычное меню
-        greeting = f"Привет, {user.first_name}!\n"
-        if main_course:
-            greeting += f"Активный курс: {main_course} {main_current_lesson} урок\n"
-        if auxiliary_course:
-            greeting += f"Дополнительный курс: {auxiliary_course}"
+    if not user_data:
+        await message.reply_text("Пожалуйста, введите ваше имя, чтобы начать.")
+        return
+    main_course, auxiliary_course, main_current_lesson = user_data
+    # Формируем приветствие
+    greeting_text = f"Привет, {user.first_name}!"
 
-        keyboard = [
-            [InlineKeyboardButton("Продолжить обучение", callback_data='continue')],
-            [InlineKeyboardButton("Мои курсы", callback_data='my_courses')],
-            [InlineKeyboardButton("Галерея работ", callback_data='gallery')]
-        ]
+    # Определяем курс и статус ДЗ
+    if main_course:
+        homework_status = await get_homework_status_text(user.id, 'main_course')
+        greeting_text += f"\nТы на курсе '{main_course}' и я жду от тебя {homework_status}."
+
+        # Добавляем предложение отправить ДЗ, если его нет
+        if "не жду" in homework_status.lower():
+            greeting_text += " Просто отправь в чат картинку или фотографию."
     else:
-        # Показываем меню для нового пользователя
-        greeting = "Для начала обучения введите кодовое слово:"
-        keyboard = [
-            [InlineKeyboardButton("Где получить код?", callback_data='get_code_help')],
-            [InlineKeyboardButton("Список кодовых слов", callback_data='code_list')]
-        ]
+        greeting_text += "\nЧтобы начать, введи кодовое слово для активации курса."
 
-    await update.message.reply_text(
-        greeting,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    # Формируем кнопки
+    keyboard = await create_main_menu_keyboard(user.id, main_course)
+
+    # Отправляем сообщение
+    await message.reply_text(greeting_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def get_homework_status_text(user_id, course_type):
     cursor.execute(f'''
@@ -264,6 +269,140 @@ async def get_homework_status_text(user_id, course_type):
     else:
         return "не жду никакую домашку"  # можно "не жду никаких домашних заданий"
 
+def parse_delay_from_filename(filename):
+    """
+    Извлекает время задержки из имени файла.
+    Возвращает задержку в секундах или None, если задержка не указана.
+    """
+    match = DELAY_PATTERN.search(filename)
+    if not match:
+        return None
+
+    value, unit = match.groups()
+    value = int(value)
+
+    if unit == "m":  # минуты
+        return value * 60
+    elif unit == "h":  # часы
+        return value * 3600
+    return None
+
+def get_lesson_text(user_id, lesson_number, course_type):
+    # Определение названия курса на основе типа курса
+    if course_type == 'main_course':
+        cursor.execute('SELECT main_course FROM users WHERE user_id = ?', (user_id,))
+    else:
+        cursor.execute('SELECT auxiliary_course FROM users WHERE user_id = ?', (user_id,))
+    course = cursor.fetchone()[0]
+
+    try:
+        with open(f'courses/{course}/lesson{lesson_number}.txt', 'r', encoding='utf-8') as file:
+            return file.read()
+    except FileNotFoundError:
+        logger.error(f"Файл урока не найден: 'courses/{course}/lesson{lesson_number}.txt'")
+        return None
+
+async def send_lesson(update: Update, context: CallbackContext, course_type: str):
+    """
+    Отправляет пользователю следующий урок.
+    """
+    user = update.effective_user
+    try:
+        # Получаем текущий урок из базы данных
+        if course_type == "main_course":
+            lesson_field = "main_current_lesson"
+            course_field = "main_course"
+        elif course_type == "auxiliary_course":
+            lesson_field = "auxiliary_current_lesson"
+            course_field = "auxiliary_course"
+        else:
+            await context.bot.send_message(chat_id=user.id, text="Ошибка: Неверный тип курса.")
+            return
+
+        cursor.execute(f'SELECT {lesson_field}, {course_field} FROM users WHERE user_id = ?', (user.id,))
+        lesson_data = cursor.fetchone()
+        if not lesson_data:
+            await context.bot.send_message(chat_id=user.id, text="Ошибка: Не найдены данные пользователя.")
+            return
+
+        current_lesson, course_name = lesson_data
+        next_lesson = current_lesson + 1
+
+        # Получаем текст урока
+        lesson_text = get_lesson_text(user.id, next_lesson, course_type)
+        if not lesson_text:
+            await context.bot.send_message(chat_id=user.id, text="Урок не найден.")
+            return
+
+        # Отправляем текст урока
+        await context.bot.send_message(chat_id=user.id, text=lesson_text)
+
+        # Получаем список всех файлов для урока
+        lesson_dir = f'courses/{course_name}/'
+        files = [
+            f for f in os.listdir(lesson_dir)
+            if f.startswith(f'lesson{next_lesson}_') and os.path.isfile(os.path.join(lesson_dir, f))
+        ]
+
+        # Отправляем файлы без задержки
+        for file in files:
+            file_path = os.path.join(lesson_dir, file)
+            delay_seconds = parse_delay_from_filename(file)
+            if not delay_seconds:  # Отправляем только файлы без задержки
+                await send_file(context.bot, user.id, file_path, file)
+
+        # Обновляем номер текущего урока
+        cursor.execute(f'UPDATE users SET {lesson_field} = ? WHERE user_id = ?', (next_lesson, user.id))
+        conn.commit()
+
+        # Сообщение с ожиданием домашней работы
+        await context.bot.send_message(
+            chat_id=user.id,
+            text="Жду домашнюю работу в виде фото или картинки. После принятия домашки - ждём след урока и по желанию смотрим предварительные материалы"
+        )
+
+        # Показываем основное меню
+        await show_main_menu(update, context)
+
+    except Exception as e:
+        logger.error(f"Ошибка при отправке урока: {e}")
+        await context.bot.send_message(chat_id=user.id, text="Произошла ошибка при отправке урока. Попробуйте позже.")
+
+
+async def send_file_with_delay(context: CallbackContext):
+    """
+    Отправляет файл с задержкой.
+    """
+    job_data = context.job.data
+    chat_id = job_data["chat_id"]
+    file_path = job_data["file_path"]
+    file_name = job_data["file_name"]
+
+    try:
+        await send_file(context.bot, chat_id, file_path, file_name)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке файла с задержкой: {e}")
+
+async def send_file(bot, chat_id, file_path, file_name):
+    """
+    Отправляет файл пользователю.
+    """
+    try:
+        if file_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+            with open(file_path, 'rb') as photo:
+                await bot.send_photo(chat_id=chat_id, photo=photo)
+        elif file_name.lower().endswith('.mp4'):
+            with open(file_path, 'rb') as video:
+                await bot.send_video(chat_id=chat_id, video=video)
+        elif file_name.lower().endswith('.mp3'):
+            with open(file_path, 'rb') as audio:
+                await bot.send_audio(chat_id=chat_id, audio=audio)
+        else:
+            with open(file_path, 'rb') as document:
+                await bot.send_document(chat_id=chat_id, document=document)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке файла {file_name}: {e}")
+        await bot.send_message(chat_id=chat_id, text=f"Не удалось загрузить файл {file_name}.")
 
 async def create_main_menu_keyboard(user_id, course_type):
     keyboard = [
@@ -367,7 +506,7 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
     # Обновляем кнопку с количеством оставшихся материалов
     remaining_materials = len(materials) - material_index
     keyboard = [
-        [InlineKeyboardButton(f"Получить предварительные материалы ({remaining_materials} осталось)",
+        [InlineKeyboardButton(f"Получить предварительные материалы к след уроку ({remaining_materials} осталось)",
                               callback_data=f'preliminary_{course_type}')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -687,48 +826,6 @@ async def get_lesson(update: Update, context: CallbackContext):
 
     # Запрашиваем урок
     await send_lesson(update, context, course_type)
-
-async def send_lesson(update: Update, context: CallbackContext, course_type):
-    """
-    Отправляет пользователю следующий урок.
-    """
-    user = update.effective_user
-    try:
-        # Получаем текущий урок из базы данных
-        if course_type == "main_course":
-            lesson_field = "main_current_lesson"
-            course_field = "main_course"
-        elif course_type == "auxiliary_course":
-            lesson_field = "auxiliary_current_lesson"
-            course_field = "auxiliary_course"
-        else:
-            await context.bot.send_message(chat_id=user.id, text="Ошибка: Неверный тип курса.")
-            return
-
-        cursor.execute(f'SELECT {lesson_field}, {course_field} FROM users WHERE user_id = ?', (user.id,))
-        lesson_data = cursor.fetchone()
-        if not lesson_data:
-            await context.bot.send_message(chat_id=user.id, text="Ошибка: Не найдены данные пользователя.")
-            return
-
-        current_lesson, course_name = lesson_data
-        next_lesson = current_lesson + 1
-
-        # Отправляем контент урока
-        lesson_text = f"Это урок {next_lesson} для курса {course_name}."  # Заглушка
-        await context.bot.send_message(chat_id=user.id, text=lesson_text)
-
-        # Обновляем номер текущего урока
-        cursor.execute(f'UPDATE users SET {lesson_field} = ? WHERE user_id = ?', (next_lesson, user.id,))
-        conn.commit()
-
-        # Добавляем кнопку с предварительными материалами, если они есть
-        keyboard = await create_main_menu_keyboard(user.id, course_type)  # Передаём course_type
-        await update.message.reply_text("Урок получен! Что дальше?", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    except Exception as e:
-        logger.error(f"Ошибка при отправке урока: {e}")
-        await context.bot.send_message(chat_id=user.id, text="Произошла ошибка при отправке урока.Попробуйте позжее.")
 
 async def show_gallery(update: Update, context: CallbackContext):
     await get_random_homework(update, context)
