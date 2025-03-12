@@ -11,7 +11,7 @@ import re
 import asyncio
 from telegram.error import TelegramError
 import datetime
-from telegram import ReplyKeyboardMarkup, KeyboardButton
+
 
 
 
@@ -188,6 +188,92 @@ async def handle_user_info(update: Update, context: CallbackContext):
         )
         return USER_INFO
 
+async def reminders(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    cursor.execute('SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?', (user_id,))
+    settings = cursor.fetchone()
+    if not settings:
+        cursor.execute('INSERT INTO user_settings (user_id) VALUES (?)', (user_id,))
+        conn.commit()
+        settings = (None, None)
+
+    morning, evening = settings
+    text = "⏰ Настройка напоминаний:\n"
+    text += f"🌅 Утреннее напоминание: {morning or 'не установлено'}\n"
+    text += f"🌇 Вечернее напоминание: {evening or 'не установлено'}\n\n"
+    text += "Чтобы установить или изменить время, используйте команды:\n"
+    text += "/set_morning HH:MM — установить утреннее напоминание\n"
+    text += "/set_evening HH:MM — установить вечернее напоминание\n"
+    text += "/disable_reminders — отключить все напоминания"
+
+    await update.message.reply_text(text)
+
+async def set_morning(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    try:
+        time = context.args[0]
+        if not re.match(r"^\d{2}:\d{2}$", time):
+            raise ValueError
+        cursor.execute('UPDATE user_settings SET morning_notification = ? WHERE user_id = ?', (time, user_id))
+        conn.commit()
+        await update.message.reply_text(f"🌅 Утреннее напоминание установлено на {time}.")
+    except (IndexError, ValueError):
+        await update.message.reply_text("Неверный формат времени. Используйте формат HH:MM.")
+
+async def disable_reminders(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    cursor.execute('UPDATE user_settings SET morning_notification = NULL, evening_notification = NULL WHERE user_id = ?', (user_id,))
+    conn.commit()
+    await update.message.reply_text("🔕 Все напоминания отключены.")
+
+async def send_reminders(context: CallbackContext):
+    now = datetime.datetime.now().strftime("%H:%M")
+    cursor.execute('SELECT user_id, morning_notification, evening_notification FROM user_settings')
+    for user_id, morning, evening in cursor.fetchall():
+        if morning and now == morning:
+            await context.bot.send_message(chat_id=user_id, text="🌅 Доброе утро! Не забудьте посмотреть материалы курса.")
+        if evening and now == evening:
+            await context.bot.send_message(chat_id=user_id, text="🌇 Добрый вечер! Не забудьте выполнить домашнее задание.")
+
+async def stats(update: Update, context: CallbackContext):
+    # Активные пользователи за последние 3 дня
+    active_users = cursor.execute('''
+        SELECT COUNT(DISTINCT user_id) 
+        FROM homeworks 
+        WHERE submission_time >= DATETIME('now', '-3 days')
+    ''').fetchone()[0]
+
+    # Домашние задания за последние сутки
+    recent_homeworks = cursor.execute('''
+        SELECT COUNT(*) 
+        FROM homeworks 
+        WHERE submission_time >= DATETIME('now', '-1 day')
+    ''').fetchone()[0]
+
+    # Общее количество пользователей
+    total_users = cursor.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+
+    text = "📊 Статистика:\n"
+    text += f"👥 Активных пользователей за последние 3 дня: {active_users}\n"
+    text += f"📚 Домашних заданий за последние сутки: {recent_homeworks}\n"
+    text += f"👤 Всего пользователей с начала работы бота: {total_users}"
+
+    await update.message.reply_text(text)
+
+async def set_evening(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    try:
+        time = context.args[0]
+        if not re.match(r"^\d{2}:\d{2}$", time):
+            raise ValueError
+        cursor.execute('UPDATE user_settings SET evening_notification = ? WHERE user_id = ?', (time, user_id))
+        conn.commit()
+        await update.message.reply_text(f"🌇 Вечернее напоминание установлено на {time}.")
+    except (IndexError, ValueError):
+        await update.message.reply_text("Неверный формат времени. Используйте формат HH:MM.")
+
+
+
 async def start(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
 
@@ -223,16 +309,6 @@ async def start(update: Update, context: CallbackContext):
             # Если курсы активированы, показываем главное меню
             await show_main_menu(update, context)
             return ConversationHandler.END
-
-async def show_admin_menu(update: Update, context: CallbackContext):
-    keyboard = [
-        [InlineKeyboardButton("Одобрить ДЗ", callback_data='approve_hw')],
-        [InlineKeyboardButton("Статистика", callback_data='stats')]
-    ]
-    await update.effective_message.reply_text(  # Use effective_message
-        "Админ-меню:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
 
 async def show_main_menu(update: Update, context: CallbackContext):
     logger.info(
@@ -710,22 +786,6 @@ async def handle_admin_approval(update: Update, context: CallbackContext):
 
     else:
         await query.message.reply_text("Неизвестное действие.")
-
-async def show_admin_menu(update: Update, context: CallbackContext):
-    """
-    Отображает меню администратора с кнопками для управления ботом.
-    """
-    user_id = update.effective_user.id
-    logger.info(f"{user_id} - showing admin menu")
-
-    keyboard = [
-        [InlineKeyboardButton("Одобрить ДЗ", callback_data='approve_hw')],
-        [InlineKeyboardButton("Статистика", callback_data='stats')]
-    ]
-    await update.effective_message.reply_text(  # Use effective_message
-        "Админ-меню:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
 
 
 async def save_admin_comment(update: Update, context: CallbackContext):
@@ -1453,6 +1513,13 @@ def main():
     application.add_handler(CallbackQueryHandler(self_approve_homework, pattern=r'^self_approve\|.+$'))
     application.add_handler(
         CallbackQueryHandler(handle_inline_buttons, pattern=r'^(next_lesson|profile|gallery|support)$'))
+
+    application.job_queue.run_repeating(send_reminders, interval=60, first=10)  # Проверка каждую минуту
+    application.add_handler(CommandHandler("reminders", reminders))
+    application.add_handler(CommandHandler("set_morning", set_morning))
+    application.add_handler(CommandHandler("set_evening", set_evening))
+    application.add_handler(CommandHandler("disable_reminders", disable_reminders))
+    application.add_handler(CommandHandler("stats", stats))
 
     application.run_polling()
 
