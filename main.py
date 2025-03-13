@@ -215,8 +215,11 @@ async def get_current_lesson(update: Update, context: CallbackContext):
             cursor.execute('''
                 INSERT INTO user_courses (user_id, course_id, course_type, progress, tariff)
                 VALUES (?, ?, ?, ?, ?)
-            ''', (user_id, active_course_id_full, 'main', lesson, 'self_check'))  # Замени 'main' и 'self_check' на актуальные значения
+            ''', (user_id, active_course_id_full, 'main', lesson, 'self_check'))
+            # TODO Замени 'main' и 'self_check' на актуальные значения
+
             conn.commit()
+            logger.warning(f" get_current_lesson с 1 урока начали на нижнем тарифе (самый быстрый) {active_course_id_full=}")
             # Используем callback_query, если это callback
             if update.callback_query:
                 await update.callback_query.message.reply_text("Вы начинаете курс с первого урока.")
@@ -246,13 +249,62 @@ async def get_current_lesson(update: Update, context: CallbackContext):
                 await update.message.reply_text(f"Файл урока не найден. Возможно, это последний урок.")
             return
 
+        # Add media in function
+        lesson_files = get_lesson_files(user_id, lesson, active_course_id)
+        for i, file_info in enumerate(lesson_files, start=1):
+            file_path = file_info['path']
+            file_type = file_info['type']
+            delay = file_info['delay']  # Получаем задержку
+            logger.info(f" {i} файл {file_path=} {file_type=}")
+            try:
+                with open(file_path, 'rb') as file:
+                    if file_type == 'photo':
+                        await context.bot.send_photo(chat_id=user_id, photo=file)
+                    elif file_type == 'video':
+                        await context.bot.send_video(chat_id=user_id, video=file)
+                    elif file_type == 'audio':
+                        await context.bot.send_audio(chat_id=user_id, audio=file)
+                    else:
+                        await context.bot.send_document(chat_id=user_id, document=file)
+                        # Отправляем информацию о задержке
+                if delay > 0:
+                    delay_time = datetime.timedelta(seconds=delay)
+                    time_release = datetime.datetime.now() + delay_time
+
+                    delay_text = f"Материал станет доступен через {delay_time} ({time_release.strftime('%H:%M:%S')})"
+                    await context.bot.send_message(chat_id=user_id, text=delay_text )
+
+
+            except FileNotFoundError:
+                logger.error(f"Media file not found: {file_path}")
+                await update.message.reply_text(f"Media file not found: {file_path}")
+            except Exception as e:
+                logger.error(f"Error sending media file: {e}")
+                await update.message.reply_text(f"Error sending media file. {e}")
+        if update.callback_query:
+            await update.callback_query.message.reply_text(f"послано { len(lesson_files)} файлов")
+        else:
+            await update.message.reply_text(f"послано { len(lesson_files)} файлов")
+
+        # Calculate the default release time of the next lesson
+        next_lesson = lesson + 1
+        next_lesson_release_time = datetime.datetime.now() + datetime.timedelta(hours=DEFAULT_LESSON_INTERVAL)
+        next_lesson_release_str = next_lesson_release_time.strftime("%d-%m-%Y %H:%M:%S")
+        await context.bot.send_message(chat_id=user_id, text=f"След урок {next_lesson} будет в {next_lesson_release_str}")
+        logger.info(f" 555 След урок {next_lesson} будет в {next_lesson_release_str}")
+
+        # и показываем меню чтоб далеко не тянуться
+        await show_main_menu(update, context)
+
+
     except Exception as e:
         logger.error(f"Ошибка при получении текущего урока: {e}")
-        # Используем callback_query, если это callback
+        # Используем callback_query
         if update.callback_query:
             await update.callback_query.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
         else:
             await update.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
+
 
 # Menu *
 async def show_main_menu(update: Update, context: CallbackContext):
@@ -362,7 +414,7 @@ async def show_main_menu(update: Update, context: CallbackContext):
 async def course_completion_actions(update: Update, context: CallbackContext):
     """Actions to perform upon course completion."""
     user_id = update.effective_user.id
-
+    logger.info(f"course_completion_actions  {user_id} 44 ")
     # Get active_course_id from user
     cursor.execute('SELECT active_course_id FROM users WHERE user_id = ?', (user_id,))
     active_course_data = cursor.fetchone()
@@ -400,11 +452,13 @@ def get_available_lessons(course_id):
     lessons = [int(f.replace('lesson', '').replace('.txt', '')) for f in os.listdir(lesson_dir) if
                f.startswith('lesson') and f.endswith('.txt')]
     lessons.sort()
+    logger.info(f"get_available_lessons  {lessons} 333 ")
     return lessons
 
 def generate_lesson_keyboard(lessons, items_per_page=10):
     """Generate buttons with page """
     keyboard = []
+    logger.info(f"generate_lesson_keyboard ")
     for lesson in lessons:
         keyboard.append([InlineKeyboardButton(f'Lesson {lesson}', callback_data=f'lesson_{lesson}')])  # type: ignore
     return keyboard
@@ -432,7 +486,7 @@ async def start(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
 
     # Логирование команды /НАЧАЛО
-    logger.info(f"  start {user_id} - НАЧАЛО")
+    logger.info(f"  start {user_id} - НАЧАЛО =================================================================")
 
     try:
         # Получение данных о пользователе из базы данных
@@ -445,6 +499,7 @@ async def start(update: Update, context: CallbackContext):
             (user_id,),
         )
         user_data = cursor.fetchone()
+        await context.bot.send_message(chat_id=user_id, text=f"привет {user_id}")
 
         # Если пользователь не найден, запрашиваем имя
         if not user_data:
@@ -484,7 +539,7 @@ async def activate_course(update: Update, context: CallbackContext, user_id, use
     course_id = course_id_full.split('_')[0]  # Базовое название курса (например, femininity)
     course_type = course.course_type  # 'main' или 'auxiliary'
     tariff = course_id_full.split('_')[1] if len(course_id_full.split('_')) > 1 else "default"  # Тариф (premium, self_check и т.д.)
-
+    logger.info(f"activate_course {tariff} {course_id_full}")
     try:
         # Проверяем, есть ли уже какой-то курс с таким базовым названием у пользователя
         cursor.execute('''
@@ -880,7 +935,7 @@ async def handle_admin_rejection(update: Update, context: CallbackContext):
 async def change_tariff(update: Update, context: CallbackContext):
     """Обрабатывает выбор тарифа."""
     user_id = update.effective_user.id
-
+    logger.info(f"change_tariff  {user_id} 777 555")
     try:
         # Получаем active_course_id из базы данных
         cursor.execute('''
@@ -914,7 +969,7 @@ async def change_tariff(update: Update, context: CallbackContext):
 async def my_courses(update: Update, context: CallbackContext):
     """Отображает список курсов пользователя."""
     user_id = update.effective_user.id
-
+    logger.info(f"my_courses  {user_id}")
     try:
         # Получаем список курсов пользователя из базы данных
         cursor.execute('''
@@ -1017,7 +1072,7 @@ async def format_progress(user_id, course_id):
         WHERE user_id = ? AND course_id = ?
     ''', (user_id, course_id))
     progress_data = cursor.fetchone()
-
+    logger.info(f"format_progress  {progress_data}")
     # Check value
     if not progress_data:
         return "No Progress"
@@ -1082,7 +1137,7 @@ async def format_progress(user_id, course_id):
 async def hw_history(update: Update, context: CallbackContext):
     """Отображает историю домашних заданий пользователя."""
     user_id = update.effective_user.id
-
+    logger.info(f"hw_history  {user_id}")
     try:
         # Получаем историю домашних заданий пользователя из базы данных
         cursor.execute('''
@@ -1113,6 +1168,7 @@ async def set_tariff(update: Update, context: CallbackContext):
     """Устанавливает выбранный тариф для пользователя."""
     query = update.callback_query
     await query.answer()
+    logger.info(f"  set_tariff ")
 
     try:
         # Извлекаем данные из callback_data
@@ -1471,56 +1527,97 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
 
 # Обрабатывает нажатия на кнопки все
 async def button_handler(update: Update, context: CallbackContext):
-    """Обрабатывает нажатия на кнопки."""
+    """Handles button presses."""
     query = update.callback_query
     data = query.data
     logger.info(f"{update.effective_user.id} - button_handler")
     await query.answer()
 
-    button_handlers = {
-        'get_current_lesson': get_current_lesson,
-        'gallery': show_gallery,
-        'gallery_next': lambda update, context: get_random_homework(update, context),
-        'menu_back': show_main_menu,
-        'support': show_support,
-        'tariffs': show_tariffs,
-        'course_settings': show_course_settings,
-        'statistics': show_statistics,
-    }
-
-    if data == 'preliminary_tasks':
-        await send_preliminary_material(update, context)
-    elif data.startswith('self_approve_'):
+    # Check for tariff selection first
+    if data.startswith('tariff_'):
+        logger.info(f" 777 данные {data} ==================")
+        # Извлекаем tariff_id, разделяя строку только один раз
         try:
-            hw_id = int(data.split('_')[2])
-            await approve_homework(update, context)
-            await query.message.reply_text("ДЗ подтверждено. Переходим к следующему уроку!")
-        except ValueError as e:
-            logger.error(f"ValueError in self_approve_ handler: {e}")
-            await query.message.reply_text(f"Ошибка в формате данных для подтверждения ДЗ: {query.data}")
-        except Exception as e:
-            logger.error(f"Error in self_approve_ handler: {e}")
-            await query.message.reply_text("Ошибка при подтверждении ДЗ. Попробуйте позже.")
-    elif data.startswith("approve_hw"):
-        try:
-            query = update.callback_query
-            hw_id = int(query.data.split('_')[2])  # Get hw_id from callback data
-            await approve_homework(update, context)
-        except ValueError as e:
-            logger.error(f"ValueError in approve_hw handler: {e}")
-            await query.message.reply_text(f"Неверный формат данных для подтверждения ДЗ: {query.data}")
-        except Exception as e:
-            logger.error(f"Error in approve_hw handler: {e}")
-            await query.message.reply_text("Ошибка при подтверждении ДЗ. Попробуйте позже.")
-
-    elif data in button_handlers:
-        handler = button_handlers[data]
-        await handler(update, context)
+            tariff_id = data.split('_', 1)[1]
+            logger.info(f" handler для handle_tariff_selection {tariff_id}")
+        except IndexError:
+            logger.error(f"Не удалось извлечь tariff_id из data: {data} ====== 8888")
+            await query.message.reply_text("Произошла ошибка. Попробуйте позже.")
+            return
+        await handle_tariff_selection(update, context, tariff_id)
+    # Then check for other known button handlers
     else:
-        await query.message.reply_text("Неизвестная команда")
+        button_handlers = {
+            'get_current_lesson': get_current_lesson,
+            'gallery': show_gallery,
+            'gallery_next': lambda update, context: get_random_homework(update, context),
+            'menu_back': show_main_menu,
+            'support': show_support,
+            'tariffs': show_tariffs,
+            'course_settings': show_course_settings,
+            'statistics': show_statistics,
+            'preliminary_tasks': send_preliminary_material, # Add preliminary tasks
+        }
 
+        if data in button_handlers:
+            handler = button_handlers[data]
+            await handler(update, context)
+        else:
+            await query.message.reply_text("Unknown command")
 
- #Обрабатывает текстовые сообщения. *
+# выбор товара в магазине *
+async def handle_tariff_selection(update: Update, context: CallbackContext, tariff_id: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    logger.info(f"  handle_tariff_selection --------------------------------")
+    try:
+        logger.info(f"333 Handling tariff selection for tariff_id: {tariff_id}")
+        with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
+            tariffs = json.load(f)
+
+        # Логирование для проверки содержимого tariffs
+        logger.info(f"Available tariff IDs: {[tariff['id'] for tariff in tariffs]}")
+
+        # Логирование непосредственно перед поиском тарифа
+        logger.info(f"Searching for tariff with id: {tariff_id}")
+        logger.info(f"Tariffs data: {tariffs} -----------------------------")
+
+        selected_tariff = None
+        for tariff in tariffs:
+            # Добавим логирование значений tariff['id'] и tariff_id
+            logger.info(f"Comparing tariff['id'] = {tariff['id']} with tariff_id = {tariff_id}")
+            if tariff['id'] == tariff_id:
+                selected_tariff = tariff
+                break
+        logger.info(f"  handle_tariff_selection 2 {selected_tariff=} ")
+
+        # Добавим логирование после попытки найти тариф
+        if selected_tariff:
+            logger.info(f"Selected tariff: {selected_tariff}")
+        else:
+            logger.warning(f"Tariff with id {tariff_id} not found.")
+
+        if selected_tariff:
+            message = f"Вы выбрали: {selected_tariff['title']}\n\n{selected_tariff['description']}"
+
+            if selected_tariff['type'] == 'discount':
+                message += f"\n\nСкидка: {int((1 - selected_tariff['price']) * 100)}%"
+            elif selected_tariff['type'] == 'payment':
+                message += f"\n\nЦена: {selected_tariff['price']} руб."
+
+            keyboard = [[InlineKeyboardButton("Купить", callback_data=f"buy_{tariff_id}")],
+                        [InlineKeyboardButton("Назад к тарифам", callback_data="tariffs")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await query.message.edit_text(message, reply_markup=reply_markup)
+        else:
+            logger.warning(f"Tariff with id {tariff_id} not found.")
+            await query.message.reply_text("Выбранный тариф не найден.")
+    except Exception as e:
+        logger.error(f"Error handling tariff selection: {e}")
+        await query.message.reply_text("Произошла ошибка при выборе тарифа. Попробуйте позже.")
+
+#Обрабатывает текстовые сообщения. *
 async def handle_text_message(update: Update, context: CallbackContext):
     """Обрабатывает текстовые сообщения."""
     user_id = update.effective_user.id
@@ -1529,12 +1626,14 @@ async def handle_text_message(update: Update, context: CallbackContext):
     # Проверяем, находится ли пользователь в состоянии ожидания кодового слова
     if context.user_data.get('waiting_for_code'):
         return  # Если ждем кодовое слово, игнорируем сообщение
-
+    if "предварительные" in text or "пм" in text:
+        await send_preliminary_material (update, context)
     if "текущий урок" in text or "ту" in text:
         await get_current_lesson(update, context)
     elif "галерея дз" in text or "гдз" in text:
         await show_gallery(update, context)
     elif "тарифы" in text or "ТБ" in text:
+        logger.info(f" тарифы 1652 строка ")
         await show_tariffs(update, context)
     elif "поддержка" in text or "пд" in text:
         await start_support_request(update, context)  # Вызываем функцию для начала запроса в поддержку
@@ -1830,7 +1929,7 @@ async def stats(update: Update, context: CallbackContext):
         FROM homeworks 
         WHERE submission_time >= DATETIME('now', '-3 days')
     ''').fetchone()[0]
-
+    logger.info(f"statsactive_users={active_users} uuuserzz ")
     # Домашние задания за последние сутки
     recent_homeworks = cursor.execute('''
         SELECT COUNT(*) 
@@ -2032,7 +2131,6 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
         logger.error(f"Ошибка при отправке предварительных материалов: {e}")
         await query.message.reply_text("Произошла ошибка при отправке предварительных материалов. Попробуйте позже.")
 
-
 # Функция для добавления кнопки "Получить предварительные материалы"
 async def add_preliminary_button(user_id, course_type):
     # Извлекаем префикс курса (main/auxiliary)
@@ -2086,8 +2184,6 @@ def get_average_homework_time(user_id):
     else:
         return "Нет данных"
 
-
-
 async def handle_admin_approval(update: Update, context: CallbackContext):
     query = update.callback_query
     logger.info(f" handle_admin_approval {update.effective_user.id} -{query}")
@@ -2111,15 +2207,15 @@ async def handle_admin_approval(update: Update, context: CallbackContext):
     else:
         await query.message.reply_text("Неизвестное действие.")
 
-
-
-
 # Загружает тарифы из файла.*
 def load_tariffs():
     """Загружает тарифы из файла."""
+    logger.info(f"load_tariffs  333333 2")
     try:
         with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            k=json.load(f)
+            logger.info(f"load_tariffs  k={k} 333333 3")
+            return k
     except FileNotFoundError:
         logger.error(f"Файл {TARIFFS_FILE} не найден.")
         return []
@@ -2130,40 +2226,48 @@ def load_tariffs():
 # Отображает тарифы и акции. *
 async def show_tariffs(update: Update, context: CallbackContext):
     """показывает акции и бонусы."""
+    logger.info(f"show_tariffs --------------------- 222")
     try:
         query = update.callback_query
         await query.answer()
 
-        # Получаем все тарифы из файла tariffs.json
+        # Загружаем тарифы из файла
         try:
             with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
                 tariffs = json.load(f)
+                logger.info(f"show_tariffs -  {tariffs}-------------------- 222")
         except FileNotFoundError:
             logger.error(f"File not found: {TARIFFS_FILE}")
-            await context.bot.send_message(chat_id=query.message.chat_id, text="Cannot display tariffs. Please try later.")
+            await context.bot.send_message(chat_id=query.message.chat_id,
+                                           text="Cannot display tariffs. Please try later.")
             return
         except json.JSONDecodeError:
-            logger.error(f"File not found: {TARIFFS_FILE}")
-            await  context.bot.send_message(chat_id=query.message.chat_id, text="Cannot display tariffs. Please try later.")
+            logger.error(f"Ошибка чтения JSON файла: {TARIFFS_FILE}")
+            await context.bot.send_message(chat_id=query.message.chat_id,
+                                           text="Cannot display tariffs. Please try later.")
             return
 
         # Формируем кнопки для каждого тарифа
         keyboard = []
+        logger.info(f"show_tariffs3 ------------------- 333")
         for tariff in tariffs:
-            if 'name' not in tariff:
-                logger.error(f"Tariff {tariff} missing 'name' key")
-                await context.bot.send_message(chat_id=query.message.chat_id, text="Tariff info is wrong. Please try later.")
-                return
-            keyboard.append([InlineKeyboardButton(tariff['name'], callback_data=f"tariff_{tariff['id']}")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
+            if 'title' not in tariff:
+                logger.error(f"Tariff missing 'title' key: {tariff.get('id', 'Unknown')}")
+                continue
+            callback_data = f"tariff_{tariff['id']}"  # Передаем полный ID тарифа
+            keyboard.append([InlineKeyboardButton(tariff['title'], callback_data=callback_data)])
 
-        await context.bot.send_message(chat_id=query.message.chat_id, text="Here new tariffs:", reply_markup=reply_markup)
+        keyboard.append([InlineKeyboardButton("Назад", callback_data="menu_back")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        logger.info(f"show_tariffs4  готово ------------------- 333")
+
+        await context.bot.send_message(chat_id=query.message.chat_id, text="Вот доступные тарифы и бонусы:",
+                                       reply_markup=reply_markup)
     except Exception as e:
-        logger.error(f"Error during show tariff: {e}")
-        if query and query.message:
-            await context.bot.send_message(chat_id=query.message.chat_id, text="Something went wrong.")
-        else:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="Something went wrong.")
+        logger.error(f"Error during show tariffs: {e}")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Something went wrong.")
+
+
 
 
 # Обрабатывает выбор тарифа. *
@@ -2173,6 +2277,10 @@ async def tariff_callback(update: Update, context: CallbackContext):
     await query.answer()
     tariff_id = query.data.split('_')[1]
     tariffs = load_tariffs()
+
+
+    logger.info(f"tariff_callback  555555 666 tariffS={tariffs} 333333 ------ >")
+
     tariff = next((t for t in tariffs if t['id'] == tariff_id), None)
 
     if not tariff:
@@ -2195,14 +2303,13 @@ async def tariff_callback(update: Update, context: CallbackContext):
         text = f"<b>{tariff['title']}</b>\n\n{tariff['description']}"
         await query.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
-
 # Обрабатывает нажатие кнопки "Купить" *
 async def buy_tariff(update: Update, context: CallbackContext):
     """Обрабатывает нажатие кнопки "Купить"."""
     query = update.callback_query
     await query.answer()
     tariff = context.user_data.get('tariff')
-
+    logger.info(f"buy_tariff  555555 666 tariff={tariff}")
     context.user_data['tariff_id'] = tariff['id']  # Сохраняем tariff_id
     if tariff['type'] == 'discount':
         await query.message.reply_text(
@@ -2227,6 +2334,7 @@ async def gift_tariff(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
     tariff = context.user_data.get('tariff')
+    logger.info(f"gift_tariff  555555 tariff={tariff}  0000000000")
     if tariff['type'] == 'discount':
         await query.message.reply_text("Подарочные сертификаты со скидками недоступны. Выберите другой тариф.")
         return ConversationHandler.END
@@ -2236,11 +2344,10 @@ async def gift_tariff(update: Update, context: CallbackContext):
     await query.message.reply_text("Введите user ID получателя подарка:")
     return WAIT_FOR_GIFT_USER_ID
 
-
-
 # Добавляет купленный курс пользователю. *
 async def add_purchased_course(user_id, tariff_id, context: CallbackContext):
     """Добавляет купленный курс пользователю."""
+    logger.info(f"add_purchased_course 555555")
     try:
         # Проверяем, есть ли уже такой курс у пользователя
         cursor.execute('''
@@ -2287,10 +2394,10 @@ async def add_purchased_course(user_id, tariff_id, context: CallbackContext):
         logger.error(f"Ошибка при добавлении курса пользователю {user_id}: {e}")
         await context.bot.send_message(user_id, "Произошла ошибка при добавлении курса. Попробуйте позже.")
 
-
 # Отклоняет скидку администратором. *
 async def show_stats(update: Update, context: CallbackContext):
     """Показывает статистику для администратора."""
+    logger.info(f"show_stats <")
     try:
         # Получаем количество пользователей
         cursor.execute("SELECT COUNT(*) FROM users")
@@ -2343,9 +2450,6 @@ async def admin_reject_discount(update: Update, context: CallbackContext):
         logger.error(f"Ошибка при отправке уведомления пользователю {user_id}: {e}")
         await query.message.reply_text("Скидка отклонена, но не удалось уведомить пользователя.")
 
-
-
-
 # Подтверждает покупку админом. *
 async def admin_approve_purchase(update: Update, context: CallbackContext):
     """Подтверждает покупку админом."""
@@ -2376,8 +2480,6 @@ async def admin_reject_purchase(update: Update, context: CallbackContext):
     await context.bot.send_message(chat_id=buyer_user_id,
                                    text="Ваш чек не был подтверждён. Пожалуйста, свяжитесь с администратором")
 
-
-
 # Обрабатывает селфи для получения скидки. *
 async def process_selfie(update: Update, context: CallbackContext):
     """Обрабатывает селфи для получения скидки."""
@@ -2398,6 +2500,7 @@ async def process_description(update: Update, context: CallbackContext):
     tariff = context.user_data.get('tariff')
     description = update.message.text
     context.user_data['description'] = description
+    logger.info(f"process_description  {description} 33333333 -------------<")
 
     photo = context.user_data.get('selfie_file_id')
 
@@ -2422,6 +2525,7 @@ async def process_check(update: Update, context: CallbackContext):
     tariff = context.user_data.get('tariff')
     photo = update.message.photo[-1]
     file_id = photo.file_id
+    logger.info(f"process_check  {file_id} -------------<")
 
     # Отправляем админам фото чека и информацию о покупке
     caption = f"Новый запрос на покупку!\nUser ID: {user_id}\nТариф: {tariff['title']}"
@@ -2444,6 +2548,7 @@ async def process_check(update: Update, context: CallbackContext):
 async def process_gift_user_id(update: Update, context: CallbackContext):
     """Обрабатывает User ID получателя подарка."""
     gift_user_id = update.message.text
+    logger.info(f"process_gift_user_id  {gift_user_id} -------------<")
 
     if not gift_user_id.isdigit():
         await update.message.reply_text("Пожалуйста, введите корректный User ID, состоящий только из цифр.")
@@ -2461,6 +2566,7 @@ async def process_gift_user_id(update: Update, context: CallbackContext):
 async def process_phone_number(update: Update, context: CallbackContext):
     contact = update.message.contact
     phone_number = contact.phone_number
+    logger.info(f"process_phone_number -------------<")
     context.user_data['phone_number'] = phone_number
 
     user_id = update.effective_user.id
@@ -2532,6 +2638,7 @@ async def get_next_lesson_time(user_id):
 
 
 async def show_gallery(update: Update, context: CallbackContext):
+    logger.info(f"show_gallery -------------<")
     await get_random_homework(update, context)
 
 async def get_gallery_count():
@@ -2539,6 +2646,7 @@ async def get_gallery_count():
     Считает количество работ в галерее (реализация зависит от способа хранения галереи).
     """
     cursor.execute('SELECT COUNT(*) FROM homeworks WHERE status = "approved"')
+    logger.info(f"get_gallery_count -------------<")
     return cursor.fetchone()[0]
 
 # галерейка
@@ -2549,7 +2657,7 @@ async def get_random_homework(update: Update, context: CallbackContext):
         user_id = query.from_user.id
     else:
         user_id = update.effective_user.id
-
+    logger.info(f"get_random_homework -------------<")
     # Получаем случайную одобренную работу
     cursor.execute('''
         SELECT hw_id, user_id, course_type, lesson, file_id 
