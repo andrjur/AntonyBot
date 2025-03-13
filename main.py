@@ -1,6 +1,6 @@
 import logging
 import time
-
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.ext import PicklePersistence
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaDocument, \
     KeyboardButton, ReplyKeyboardMarkup
@@ -97,17 +97,6 @@ DEFAULT_LESSON_DELAY_HOURS = 3
 
 logger.info(f"{DEFAULT_LESSON_DELAY_HOURS=} {DEFAULT_LESSON_INTERVAL=} время старта {time.strftime('%d/%m/%Y %H:%M:%S')}")
 
-# клавиатурка главного меню *
-async def create_main_menu_keyboard(user_id, active_course_id):
-    """Создает клавиатуру главного меню."""
-    inline_keyboard = [
-        [InlineKeyboardButton("Следующий урок", callback_data="next_lesson")],
-        [InlineKeyboardButton("Профиль", callback_data="profile")],
-        [InlineKeyboardButton("Галерея", callback_data="gallery")],
-        [InlineKeyboardButton("Поддержка", callback_data="support")],
-        [InlineKeyboardButton("Настройки курса", callback_data="course_settings")],  # Добавляем кнопку настроек
-    ]
-    return inline_keyboard
 
 # получение имени и проверка *
 async def handle_user_info(update: Update, context: CallbackContext):
@@ -188,7 +177,6 @@ async def handle_code_words(update: Update, context: CallbackContext):
     await update.message.reply_text("Неверное кодовое слово. Попробуйте еще раз.")
     return WAIT_FOR_CODE
 
-
 # текущий урок заново
 async def get_current_lesson(update: Update, context: CallbackContext):
     """Отправляет все материалы текущего урока."""
@@ -266,33 +254,30 @@ async def get_current_lesson(update: Update, context: CallbackContext):
         else:
             await update.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
 
-
-
-
-
-# менюшечка *
+# Menu *
 async def show_main_menu(update: Update, context: CallbackContext):
     user = update.effective_user
     logger.info(f"{user} - show_main_menu")
 
-    try:  # Получаем данные о курсе
-        # Получаем active_course_id из users
+    try:
+        # Get data of course
         cursor.execute('SELECT active_course_id FROM users WHERE user_id = ?', (user.id,))
         active_course_data = cursor.fetchone()
 
         if not active_course_data or not active_course_data[0]:
-            # Используем callback_query, если это callback
+            # Using callback_query
             if update.callback_query:
-                await update.callback_query.message.reply_text("Активируйте курс через кодовое слово.")
+                await update.callback_query.message.reply_text("Activate with code.")
             else:
-                await update.message.reply_text("Активируйте курс через кодовое слово.")
+                await update.message.reply_text("Activate with code.")
             return
 
         active_course_id_full = active_course_data[0]
-        # Обрезаем название курса до первого символа "_"
+        # Short name
         active_course_id = active_course_id_full.split('_')[0]
         active_tariff = active_course_id_full.split('_')[1] if len(active_course_id_full.split('_')) > 1 else "default"
-        # Получаем данные курса из user_courses
+
+        # Data of course
         cursor.execute('''
             SELECT course_type, progress
             FROM user_courses
@@ -300,53 +285,129 @@ async def show_main_menu(update: Update, context: CallbackContext):
         ''', (user.id, active_course_id_full))
         course_type, progress = cursor.fetchone()
 
-        # Получаем времена уведомлений из user_settings
+        # Notifications
         cursor.execute('SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?',
                        (user.id,))
         settings = cursor.fetchone()
-        morning_time = settings[0] if settings else "Не установлено"
-        evening_time = settings[1] if settings else "Не установлено"
+        morning_time = settings[0] if settings else "Not set"
+        evening_time = settings[1] if settings else "Not set"
 
-        # Формируем приветствие
+        # Get username
         cursor.execute('SELECT full_name FROM users WHERE user_id = ?', (user.id,))
         full_name = cursor.fetchone()[0]
-        greeting = f"""Привет, {full_name.split()[0]}!
-        Курс: {active_course_id} ({course_type}) {active_tariff}
-        Прогресс: урок {progress}
-        Домашнее задание: {await get_homework_status_text(user.id, active_course_id_full)}"""
+        homework = await get_homework_status_text(user.id, active_course_id_full)
 
-        # Создаем кнопки с эмоджи и в одном ряду
+        # Checking last homework
+        lesson_files = get_lesson_files(user.id, progress, active_course_id)
+        last_lesson = check_last_lesson(active_course_id)
+
+        # Checking if end and go to action
+        if int(progress) >= int(last_lesson):
+            await course_completion_actions(update, context)
+            return
+        # Debug state
+        if context.user_data.get('waiting_for_code'):
+            state_emoji = "🔑"  # Key emoji for 'waiting_for_code' state
+        else:
+            state_emoji = "✅"  # Checkmark for other states
+
+
+        greeting = f"""Приветствую, {full_name.split()[0]}! {state_emoji}
+        Курс: {active_course_id} ({course_type}) {active_tariff}
+        Прогресс: {await format_progress(user.id, active_course_id)}
+        Домашка: {homework}"""
+        # Make buttons
         keyboard = [
             [
-                InlineKeyboardButton("📚 Текущий Урок", callback_data='get_current_lesson'),
+                InlineKeyboardButton("📚 Текущий Урок - повтори всё", callback_data='get_current_lesson'),
                 InlineKeyboardButton("🖼 Галерея ДЗ", callback_data='gallery')
             ],
             [
-                InlineKeyboardButton(f"⚙️ Настройка Курса ({morning_time}, {evening_time})",
+                InlineKeyboardButton(f"⚙ Настройка Курса ⏰({morning_time}, {evening_time})",
                                      callback_data='course_settings')
             ],
             [
-                InlineKeyboardButton("💰 Тарифы и Бонусы", callback_data='tariffs'),
-                InlineKeyboardButton("🙋‍♂️ ПоДдержка", callback_data='support')
+                InlineKeyboardButton("💰 Тарифы и Бонусы <- тут много", callback_data='tariffs'),
+            ],
+            [   InlineKeyboardButton("🙋 ПоДдержка", callback_data='support')
             ]
         ]
+        # ADD DYNAMIC BUTTON
+        # Find lesson
+        next_lesson = progress + 1
+
+        # If lesson available add it
+        lessons = get_preliminary_materials(active_course_id, next_lesson)
+        if  len(lessons) > 0 and not (homework.startswith("есть")):
+            keyboard.insert(0, [InlineKeyboardButton("🙇🏼Предварительные материалы к след. уроку", callback_data='preliminary_tasks')])
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Отправляем меню
-        # Используем callback_query, если это callback
+        # Send menu
+        # Using callback_query
         if update.callback_query:
             await update.callback_query.message.reply_text(greeting, reply_markup=reply_markup)
         else:
             await update.message.reply_text(greeting, reply_markup=reply_markup)
 
     except Exception as e:
-        logger.error(f"время {time.strftime('%H:%M:%S')} Ошибка в show_main_menu: {str(e)}")
-        # Используем callback_query, если это callback
+        logger.error(f"time {time.strftime('%H:%M:%S')} Error in show_main_menu: {str(e)}")
+        # Using callback_query
         if update.callback_query:
-            await update.callback_query.message.reply_text("Ошибка отображения меню. Попробуйте позже.")
+            await update.callback_query.message.reply_text("Error display menu. Try later.")
         else:
-            await update.message.reply_text("Ошибка отображения меню. Попробуйте позже.")
+            await update.message.reply_text("Error display menu. Try later.")
 
+
+
+async def course_completion_actions(update: Update, context: CallbackContext):
+    """Actions to perform upon course completion."""
+    user_id = update.effective_user.id
+
+    # Get active_course_id from user
+    cursor.execute('SELECT active_course_id FROM users WHERE user_id = ?', (user_id,))
+    active_course_data = cursor.fetchone()
+    active_course_id_full = active_course_data[0]
+    # Inform user
+    await update.message.reply_text("Congratulations, you have finished the course")
+
+    await show_statistics(update, context)
+
+    # Update to aux
+    cursor.execute('''
+        UPDATE user_courses
+        SET course_type = 'auxiliary'
+        WHERE user_id = ? AND course_id = ?
+    ''', (user_id, active_course_id_full))
+    conn.commit()
+
+    # End homeworks
+    cursor.execute('''
+        DELETE FROM homeworks
+        WHERE user_id = ? AND course_id = ?
+    ''', (user_id, active_course_id_full))
+    conn.commit()
+
+    # Generate button to watch every lesson
+    available_lessons = get_available_lessons(active_course_id_full)
+    keyboard = generate_lesson_keyboard(available_lessons)
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text("All finished .", reply_markup=reply_markup)
+
+def get_available_lessons(course_id):
+    """Get all existing lessons by course."""
+    lesson_dir = f'courses/{course_id}/'
+    lessons = [int(f.replace('lesson', '').replace('.txt', '')) for f in os.listdir(lesson_dir) if
+               f.startswith('lesson') and f.endswith('.txt')]
+    lessons.sort()
+    return lessons
+
+def generate_lesson_keyboard(lessons, items_per_page=10):
+    """Generate buttons with page """
+    keyboard = []
+    for lesson in lessons:
+        keyboard.append([InlineKeyboardButton(f'Lesson {lesson}', callback_data=f'lesson_{lesson}')])  # type: ignore
+    return keyboard
 
 
 
@@ -363,8 +424,7 @@ async def get_homework_status_text(user_id, course_id):
         hw_id, lesson, status = pending_hw
         return f"есть домашка по {lesson} уроку"
     else:
-        return "домашек нет"
-
+        return "проверки домашек нет"
 
 # НАЧАЛО *
 async def start(update: Update, context: CallbackContext):
@@ -553,7 +613,6 @@ def get_lesson_text(user_id, lesson_number, course_id):
         logger.error(f"Ошибка при чтении файла урока: {e}")
         return None
 
-
 # вычисляем время следующего урока *
 async def update_next_lesson_time(user_id, course_id):
     """Обновляет время следующего урока для пользователя."""
@@ -600,7 +659,7 @@ async def course_management(update: Update, context: CallbackContext):
 
     # Формируем кнопки
     keyboard = [
-        [InlineKeyboardButton("Сменить тариф", callback_data="change_tariff")],
+        [InlineKeyboardButton("Сменить $$$ тариф", callback_data="change_tariff")],
         [InlineKeyboardButton("Мои курсы", callback_data="my_courses")],
         [InlineKeyboardButton("История ДЗ", callback_data="hw_history")]
     ]
@@ -608,84 +667,41 @@ async def course_management(update: Update, context: CallbackContext):
 
 # Обрабатывает отправку домашнего задания и отправляет его администратору (если требуется *
 async def handle_homework_submission(update: Update, context: CallbackContext):
-    """Обрабатывает отправку домашнего задания."""
+    """Handles homework submission."""
     user_id = update.effective_user.id
 
-    # Получаем active_course_id из users
+    # Get active_course_id and progress
     cursor.execute('SELECT active_course_id FROM users WHERE user_id = ?', (user_id,))
     active_course_data = cursor.fetchone()
 
     if not active_course_data or not active_course_data[0]:
-        await update.message.reply_text("Активируйте курс через кодовое слово.")
+        await update.message.reply_text("Пожалуйста, активируйте курс.")
         return
 
     active_course_id_full = active_course_data[0]
-    course_id = active_course_id_full.split('_')[0]
-    tariff = active_course_id_full.split('_')[1] if len(active_course_id_full.split('_')) > 1 else "default"
-
-    # Получаем номер текущего урока
     cursor.execute('''
-        SELECT progress FROM user_courses
+        SELECT progress
+        FROM user_courses
         WHERE user_id = ? AND course_id = ?
     ''', (user_id, active_course_id_full))
     progress_data = cursor.fetchone()
 
     if not progress_data:
-        # await update.message.reply_text("Не найден прогресс курса.") # Removing this line
-        lesson = 1 #If no progress, start with lesson 1
-    else:
-        lesson = progress_data[0]
+        await update.message.reply_text("Не найден прогресс курса.")
+        return
 
-    try:
-        # Сохраняем информацию о ДЗ в базе данных
-        file_id = update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id
-        cursor.execute('''
-            INSERT INTO homeworks (user_id, course_id, lesson, file_id, submission_time, status)
-            VALUES (?, ?, ?, ?, DATETIME('now'), ?)
-        ''', (user_id, active_course_id_full, lesson, file_id, 'pending'))
-        conn.commit()
+    lesson = progress_data[0]
 
-        if tariff == "self":
-            # Если тариф self, сразу подтверждаем и увеличиваем прогресс
-            await approve_homework(update, context, user_id=user_id, course_id=active_course_id_full, lesson=lesson)
-            await update.message.reply_text("ДЗ принято. Переходим к следующему уроку!")
-        else:
-            # Отправляем ДЗ администратору для проверки (для других тарифов)
-            # Получаем hw_id только что добавленной домашки
-            cursor.execute("SELECT last_insert_rowid()")
-            hw_id = cursor.fetchone()[0]
-            # Формируем подпись
-            caption = f"Новое ДЗ для проверки!\nUser ID: {user_id}\nКурс: {course_id} ({tariff})\nУрок: {lesson}"
+    # Log first_submission_time if it's not already set
+    first_submission_time = datetime.now()
+    cursor.execute('''
+        UPDATE homeworks
+        SET first_submission_time = COALESCE(first_submission_time, ?)
+        WHERE user_id = ? AND course_id = ? AND lesson = ?
+    ''', (first_submission_time, user_id, active_course_id_full, lesson))
+    conn.commit()
 
-            # Создаем кнопки для одобрения и отклонения
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Approve", callback_data=f'admin_approve_{hw_id}'),
-                    InlineKeyboardButton("❌ Reject", callback_data=f'admin_reject_{hw_id}')
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            # Отправляем фото администратору
-            await context.bot.send_photo(chat_id=ADMIN_GROUP_ID, photo=file_id, caption=caption, reply_markup=reply_markup)
-            await update.message.reply_text("ДЗ отправлено администратору для проверки.")
-
-    except Exception as e:
-        logger.error(f"Ошибка при обработке ДЗ: {e}")
-        await update.message.reply_text("Произошла ошибка при отправке ДЗ. Попробуйте позже.")
-
-    # Выводим меню и время ожидания следующего урока
-    await show_main_menu(update, context)
-
-    next_lesson_time = await calculate_time_to_next_lesson(user_id, active_course_id_full)
-
-    if next_lesson_time > timedelta(0):
-        hours, remainder = divmod(next_lesson_time.total_seconds(), 3600)
-        minutes, seconds = divmod(remainder, 60)
-        time_str = f"{int(hours)} часов {int(minutes)} минут"
-        await update.message.reply_text(f"Следующий урок будет доступен через: {time_str}")
-    else:
-        await update.message.reply_text("Следующий урок доступен прямо сейчас!")
+    await update.message.reply_text("Домашнее задание отправлено.")
 
 # Добавьте функцию для получения следующего времени урока
 async def calculate_time_to_next_lesson(user_id, active_course_id_full):
@@ -712,78 +728,59 @@ async def calculate_time_to_next_lesson(user_id, active_course_id_full):
     # Возвращаем, сколько времени осталось до следующего урока
     return next_lesson_time - datetime.datetime.now()
 
-async def send_preliminary_material(update: Update, context: CallbackContext):
-    """Отправляет предварительные материалы для следующего урока."""
-    await update.message.reply_text("Здесь будут предварительные задания для следующего урока.")
-
-
-
 # Подтверждает домашнее задание и увеличивает прогресс пользователя *
-async def approve_homework(update: Update, context: CallbackContext, hw_id: int = None, user_id: int = None, course_id: str = None, lesson: int = None):
-    """Подтверждает домашнее задание и увеличивает прогресс пользователя."""
-    try:
-        # Если передан hw_id, получаем данные из базы
-        if hw_id:
-            cursor.execute('''
-                SELECT user_id, course_id, lesson 
-                FROM homeworks 
-                WHERE hw_id = ?
-            ''', (hw_id,))
-            hw_data = cursor.fetchone()
+async def approve_homework(update: Update, context: CallbackContext):
+    """Approves homework and schedules the next lesson."""
+    query = update.callback_query
+    await query.answer()
 
-            if not hw_data:
-                await update.message.reply_text("Домашнее задание не найдено.")
-                return
+    data = query.data.split('_')
+    hw_id = int(data[2])
 
-            user_id, course_id, lesson = hw_data
+    # Get homework details
+    cursor.execute('''
+        SELECT user_id, course_id, lesson, lesson_sent_time
+        FROM homeworks
+        WHERE hw_id = ?
+    ''', (hw_id,))
+    result = cursor.fetchone()
 
-        # Проверка обязательных параметров
-        if not all([user_id, course_id, lesson]):
-            await update.message.reply_text("Недостаточно данных для подтверждения ДЗ.")
-            return
+    if result is None:
+        await query.message.reply_text("Cannot find homework")
+        return
 
-        # Обновляем статус домашней работы
-        if hw_id:
-            cursor.execute('''
-                UPDATE homeworks 
-                SET status = 'approved', 
-                    approval_time = DATETIME('now'), 
-                    feedback = COALESCE(feedback, 'Проверено автоматически')
-                WHERE hw_id = ?
-            ''', (hw_id,))
-        else:
-            cursor.execute('''
-                UPDATE homeworks 
-                SET status = 'approved', 
-                    approval_time = DATETIME('now')
-                WHERE user_id = ? 
-                    AND course_id = ? 
-                    AND lesson = ?
-            ''', (user_id, course_id, lesson))
+    user_id, course_id, lesson, lesson_sent_time = result
+    logger.info(f"Confirm DCh [User: {user_id}, Course: {course_id}, Lesson: {lesson}]")
 
-        # Увеличиваем прогресс пользователя
-        cursor.execute('''
-            UPDATE user_courses
-            SET progress = progress + 1
-            WHERE user_id = ? 
-                AND course_id = ?
-        ''', (user_id, course_id))
+    # Log final_approval_time
+    final_approval_time = datetime.now()
+    cursor.execute('''
+        UPDATE homeworks
+        SET final_approval_time = ?
+        WHERE hw_id = ?
+    ''', (final_approval_time, hw_id))
 
-        conn.commit()
+    # Update progress to next lesson
+    next_lesson = lesson + 1
+    cursor.execute('''
+        UPDATE user_courses
+        SET progress = ?
+        WHERE user_id = ? AND course_id = ?
+    ''', (next_lesson, user_id, course_id))
 
-        logger.info(f"ДЗ подтверждено [User: {user_id}, Course: {course_id}, Lesson: {lesson}]")
+    conn.commit()
 
-        # Отправляем уведомление пользователю
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"✅ Ваше домашнее задание к уроку {lesson} успешно подтверждено!"
-        )
+    # Schedule next lesson based on DEFAULT_LESSON_INTERVAL from lesson_sent_time
+    if not lesson_sent_time:
+        # If no previous sent time is logged, use now as fallback
+        lesson_sent_time = datetime.now()
 
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Ошибка при подтверждении ДЗ: {e}")
-        await update.message.reply_text("Произошла ошибка при подтверждении ДЗ.")
+    schedule_time = datetime.strptime(lesson_sent_time, '%Y-%m-%d %H:%M:%S') + timedelta(hours=DEFAULT_LESSON_INTERVAL)
 
+    add_user_to_scheduler(user_id=user_id, time=schedule_time.time(), context=context)
+
+    await query.message.reply_text(
+        f"Домашнее задание по уроку {lesson} подтверждено. Следующий урок будет отправлен в {schedule_time}.")
 
 async def save_admin_comment(update: Update, context: CallbackContext):
     """
@@ -879,7 +876,6 @@ async def handle_admin_rejection(update: Update, context: CallbackContext):
         logger.error(f"Ошибка при отклонении ДЗ: {e}")
         await query.message.reply_text("Произошла ошибка при отклонении ДЗ. Попробуйте позже.")
 
-
 # Обрабатывает выбор тарифа
 async def change_tariff(update: Update, context: CallbackContext):
     """Обрабатывает выбор тарифа."""
@@ -942,6 +938,145 @@ async def my_courses(update: Update, context: CallbackContext):
     except Exception as e:
         logger.error(f"Ошибка при отображении списка курсов: {e}")
         await update.callback_query.message.reply_text("Произошла ошибка при отображении списка курсов. Попробуйте позже.")
+
+# статистика домашек *
+async def show_statistics(update: Update, context: CallbackContext):
+    """Shows statistics for lessons and homework, considering all users, deviations, and course completion."""
+    user_id = update.effective_user.id
+    logger.info(f" Show stat: {user_id=}")
+
+    try:
+        # Get active_course_id from user
+        cursor.execute('SELECT active_course_id FROM users WHERE user_id = ?', (user_id,))
+        active_course_data = cursor.fetchone()
+
+        if not active_course_data or not active_course_data[0]:
+            await update.message.reply_text("Activate course first .")
+            return
+
+        active_course_id_full = active_course_data[0]
+        active_course_id = active_course_id_full.split('_')[0]
+
+        # Get all users who have completed homework for this course
+        cursor.execute('''
+            SELECT user_id, AVG((JULIANDAY(final_approval_time) - JULIANDAY(lesson_sent_time)) * 24 * 60 * 60)
+            FROM homeworks
+            WHERE course_id = ? AND final_approval_time IS NOT NULL
+            GROUP BY user_id
+        ''', (active_course_id_full,))
+        all_user_stats = cursor.fetchall()
+
+        if not all_user_stats:
+            await update.message.reply_text("No available  data.")
+            return
+
+        # Calculate average completion time across all users
+        total_times = [time for user, time in all_user_stats if time is not None]
+        average_time_all = sum(total_times) / len(total_times) if total_times else 0
+
+        # Get user's average completion time
+        cursor.execute('''
+            SELECT AVG((JULIANDAY(final_approval_time) - JULIANDAY(lesson_sent_time)) * 24 * 60 * 60)
+            FROM homeworks
+            WHERE course_id = ? AND user_id = ? AND final_approval_time IS NOT NULL
+        ''', (active_course_id_full, user_id))
+        user_average_time = cursor.fetchone()[0] or 0
+
+        # Calculate deviation from the average
+        diff_percentage = ((user_average_time - average_time_all) / average_time_all) * 100 if average_time_all else 0
+        deviation_text = f"{diff_percentage:.2f}%"
+        logger.info(f"Checking {user_id=} {average_time_all=} {user_average_time=} {diff_percentage=}")
+
+        if diff_percentage < 0:
+            deviation_text = f"Faster {abs(diff_percentage):.2f}%."
+        else:
+            deviation_text = f"Slower {abs(diff_percentage):.2f}%."
+
+        # Get average homework completion time
+        average_homework_time = get_average_homework_time(user_id)
+
+        # Build statistics message
+        stats_message = f"Statistics for {active_course_id_full}:\n"
+        stats_message += f"Average time all users : {timedelta(seconds=average_time_all) if average_time_all else 'No data'}\n"
+        stats_message += f"Time: {timedelta(seconds=user_average_time) if user_average_time else 'No data'} ({deviation_text})\n"
+        stats_message += f"Average homework completion: {average_homework_time}\n"
+
+        await update.message.reply_text(stats_message)
+
+    except Exception as e:
+        logger.error(f"Cannot display stats: {e}")
+        await update.message.reply_text("Error - unable to display stats try later")
+
+# Getting info about lesson.*
+async def format_progress(user_id, course_id):
+    """Getting info about lesson."""
+    # Get progress of course
+    cursor.execute('''
+        SELECT progress
+        FROM user_courses
+        WHERE user_id = ? AND course_id = ?
+    ''', (user_id, course_id))
+    progress_data = cursor.fetchone()
+
+    # Check value
+    if not progress_data:
+        return "No Progress"
+
+    progress = progress_data[0]
+
+    # Get total amount
+    cursor.execute('''
+        SELECT DISTINCT lesson FROM homeworks
+        WHERE course_id = ?
+        ORDER BY lesson ASC
+    ''', (course_id,))
+    lessons_available = [row[0] for row in cursor.fetchall()]
+    lessons_available = [x for x in lessons_available if isinstance(x, int)] #Remove from list
+    lessons_available.sort()
+
+    # Find what lesson was
+    lessons_completed = []
+    cursor.execute('''
+        SELECT DISTINCT lesson FROM homeworks
+        WHERE course_id = ? and user_id = ?
+        ORDER BY lesson ASC
+    ''', (course_id, user_id,))
+    lessons_completed = [row[0] for row in cursor.fetchall()]
+    lessons_completed = [x for x in lessons_completed if isinstance(x, int)] #Remove from list
+    lessons_completed.sort()
+
+    # Make report
+    skipped_lessons = sorted(list(set(lessons_available) - set(lessons_completed)))
+
+    # Make short log
+    skipped_ranges = []
+    start = None
+    end = None
+
+    for i in range(len(skipped_lessons)):
+        if start is None:
+            start = skipped_lessons[i]
+            end = skipped_lessons[i]
+        elif skipped_lessons[i] == end + 1:
+            end = skipped_lessons[i]
+        else:
+            if start == end:
+                skipped_ranges.append(str(start))
+            else:
+                skipped_ranges.append(f"{start}..{end}")
+            start = skipped_lessons[i]
+            end = skipped_lessons[i]
+
+    if start is not None:
+        if start == end:
+            skipped_ranges.append(str(start))
+        else:
+            skipped_ranges.append(f"{start}..{end}")
+
+    skipped_text = f'({", ".join(skipped_ranges)} - skipped)' if skipped_ranges else ''
+    # Return full value
+    return f'Lesson {progress} {skipped_text}'
+
 
 # "Отображает историю домашних заданий пользователя
 async def hw_history(update: Update, context: CallbackContext):
@@ -1103,7 +1238,7 @@ async def show_lesson(update: Update, context: CallbackContext):
 
                 try:
                     if file_type == 'photo':
-                         with open(file_path, 'rb') as photo_file:
+                        with open(file_path, 'rb') as photo_file:
                             if update.callback_query:
                                 await context.bot.send_photo(
                                     chat_id=update.effective_chat.id,
@@ -1125,7 +1260,7 @@ async def show_lesson(update: Update, context: CallbackContext):
                                     caption=f"Аудио к уроку {lesson}"
                                 )
                             else:
-                                 await context.bot.send_audio(
+                                await context.bot.send_audio(
                                     chat_id=user_id,
                                     audio=audio_file,
                                     caption=f"Аудио к уроку {lesson}"
@@ -1133,7 +1268,7 @@ async def show_lesson(update: Update, context: CallbackContext):
                     elif file_type == 'video':
                         with open(file_path, 'rb') as video_file:
                             if update.callback_query:
-                                 await context.bot.send_video(
+                                await context.bot.send_video(
                                     chat_id=update.effective_chat.id,
                                     video=video_file,
                                     caption=f"Видео к уроку {lesson}"
@@ -1167,11 +1302,13 @@ async def show_lesson(update: Update, context: CallbackContext):
                 except TelegramError as e:
                     logger.error(f"Ошибка при отправке файла {file_path}: {e}")
                     await update.callback_query.message.reply_text(
-                        f"Произошла ошибка при отправке файла {os.path.basename(file_path)}.")
+                        f"Произошла ошибка при отправке файла {os.path.basename(file_path)}."
+                    )
                 except Exception as e:
                     logger.error(f"Неожиданная ошибка при отправке файла {file_path}: {e}")
                     await update.callback_query.message.reply_text(
-                        f"Произошла непредвиденная ошибка при отправке файла {os.path.basename(file_path)}.")
+                        f"Произошла непредвиденная ошибка при отправке файла {os.path.basename(file_path)}."
+                    )
 
             # После отправки последнего файла показываем меню и напоминаем о ДЗ
             await show_main_menu(update, context)
@@ -1179,155 +1316,208 @@ async def show_lesson(update: Update, context: CallbackContext):
             # Добавляем напоминание о ДЗ
             homework_status = await get_homework_status_text(user_id, active_course_id_full)
             if update.callback_query:
-                 await update.callback_query.message.reply_text(f"Напоминаем: {homework_status}")
+                await update.callback_query.message.reply_text(f"Напоминаем: {homework_status}")
             else:
                 await update.message.reply_text(f"Напоминаем: {homework_status}")
 
         else:
-             if update.callback_query:
+            if update.callback_query:
                 await update.callback_query.message.reply_text("Файлы к этому уроку не найдены.")
-             else:
-                 await update.message.reply_text("Файлы к этому уроку не найдены.")
+            else:
+                await update.message.reply_text("Файлы к этому уроку не найдены.")
 
-            await show_main_menu(update, context)  # Показываем меню, даже если файлов не
+            await show_main_menu(update, context)  # Показываем меню, даже если файлов нет
             homework_status = await get_homework_status_text(user_id, active_course_id_full)
             if update.callback_query:
-                 await update.callback_query.message.reply_text(f"Напоминаем: {homework_status}")
+                await update.callback_query.message.reply_text(f"Напоминаем: {homework_status}")
             else:
                 await update.message.reply_text(f"Напоминаем: {homework_status}")
 
-    except Exception as e: # это часть show_lesson
+    except Exception as e:  # это часть show_lesson
         logger.error(f"Ошибка при получении материалов урока: {e}")
         if update.callback_query:
             await update.callback_query.message.reply_text("Ошибка при получении материалов урока. Попробуйте позже.")
         else:
             await update.message.reply_text("Ошибка при получении материалов урока. Попробуйте позже.")
 
-
-
 # Функция для получения файлов урока (обновленная версия)
-async def get_lesson_files(user_id, lesson_number, course_id):
-    """Получает список файлов для урока с указанием задержки."""
-    logger.info(f" get_lesson_files {user_id} - lesson_number {lesson_number}")
-    lesson_number = int(lesson_number)
-    lesson_dir = f'courses/{course_id}'
-
+def get_lesson_files(user_id, lesson_number, course_id):
+    """Получает список файлов урока (аудио, видео, изображения) с задержками."""
+    logger.info(f"  get_lesson_files {user_id} - {lesson_number=}")
     try:
-        files_info = []
-        for filename in os.listdir(lesson_dir):
-            if filename.startswith(f'lesson{lesson_number}_'):
-                filepath = os.path.join(lesson_dir, filename)
+        # Убедимся, что lesson_number - это целое число
+        lesson_number = int(lesson_number)
+        lesson_dir = f'courses/{course_id}/'
+        files = []
 
-                # Извлекаем задержку
+        for filename in os.listdir(lesson_dir):
+            if filename.startswith(f'lesson{lesson_number}') and os.path.isfile(os.path.join(lesson_dir, filename)) \
+                    and not filename.endswith('.txt'):
+
+                file_path = os.path.join(lesson_dir, filename)
                 match = DELAY_PATTERN.search(filename)
+                delay = 0
                 if match:
                     delay_value = int(match.group(1))
                     delay_unit = match.group(2)
-                    delay = delay_value * 60 if delay_unit == 'm' else delay_value * 3600 if delay_unit == 'h' else 0
-                else:
-                    delay = 0
+                    if delay_unit == 'm':
+                        delay = delay_value * 60  # minutes to seconds
+                    elif delay_unit == 'h':
+                        delay = delay_value * 3600  # hours to seconds
 
-                # Определяем тип файла
+                file_type = 'document'  # Default
+
                 if filename.endswith(('.jpg', '.jpeg', '.png', '.gif')):
                     file_type = 'photo'
                 elif filename.endswith(('.mp3', '.wav', '.ogg')):
                     file_type = 'audio'
                 elif filename.endswith(('.mp4', '.avi', '.mov')):
                     file_type = 'video'
-                else:
-                    file_type = 'document'
 
-                files_info.append({
-                    'path': filepath,
-                    'delay': delay,
-                    'type': file_type
-                })
+                files.append({'path': file_path, 'delay': delay, 'type': file_type})
 
-        return files_info
+        # Сортируем файлы так, чтобы сначала шли файлы без задержки, потом с наименьшей задержкой
+        files.sort(key=lambda x: x['delay'])
+        return files
+
     except FileNotFoundError:
-        logger.error(f"Директория не найдена: {lesson_dir}")
-        return None
+        logger.error(f"Папка с файлами урока не найдена: {lesson_dir}")
+        return []
     except Exception as e:
-        logger.error(f"Ошибка при получении списка файлов урока: {e}")
-        return None
+        logger.error(f"Ошибка при получении файлов урока: {e}")
+        return []
+
+#предварительные задания
+async def send_preliminary_material(update: Update, context: CallbackContext):
+    """Отправляет предварительные материалы для следующего урока."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = update.effective_user.id
 
 
-# Обрабатывает нажатия на
+    # Получаем active_course_id из users
+    cursor.execute('SELECT active_course_id FROM users WHERE user_id = ?', (user_id,))
+    active_course_data = cursor.fetchone()
+
+    if not active_course_data or not active_course_data[0]:
+        await query.message.reply_text("Для начала активируйте кодовое слово курса.")
+        return
+
+    active_course_id_full = active_course_data[0]
+    # Обрезаем название курса до первого символа "_"
+    active_course_id = active_course_id_full.split('_')[0]
+
+    # Получаем progress (номер урока) из user_courses
+    cursor.execute('''
+        SELECT progress
+        FROM user_courses
+        WHERE user_id = ? AND course_id = ?
+    ''', (user_id, active_course_id_full))
+    progress_data = cursor.fetchone()
+
+
+    try:
+        if not progress_data:
+            await query.message.reply_text("Прогресс курса не найден. Пожалуйста, начните курс сначала.")
+            return
+
+        lesson = progress_data[0]
+        next_lesson = lesson + 1
+
+        # Получаем список предварительных материалов
+        materials = get_preliminary_materials(active_course_id, next_lesson)
+
+        if not materials:
+            await query.message.reply_text("Предварительные материалы для следующего урока отсутствуют.")
+            return
+
+        # Отправляем материалы
+        for material_file in materials:
+            material_path = f'courses/{active_course_id}/{material_file}'
+
+            # Определяем тип файла
+            try:
+                if material_file.endswith(('.jpg', '.jpeg', '.png', '.gif')):
+                    with open(material_path, 'rb') as photo_file:
+                        await context.bot.send_photo(chat_id=user_id, photo=photo_file)
+                elif material_file.endswith(('.mp4', '.avi', '.mov')):
+                    with open(material_path, 'rb') as video_file:
+                        await context.bot.send_video(chat_id=user_id, video=video_file)
+                elif material_file.endswith(('.mp3', '.wav', '.ogg')):
+                    with open(material_path, 'rb') as audio_file:
+                        await context.bot.send_audio(chat_id=user_id, audio=audio_file)
+                else:
+                    with open(material_path, 'rb') as document_file:
+                        await context.bot.send_document(chat_id=user_id, document=document_file)
+            except FileNotFoundError:
+                logger.error(f"Файл не найден: {material_path}")
+                await query.message.reply_text(f"Файл {material_file} не найден.")
+            except TelegramError as e:
+                logger.error(f"Ошибка при отправке файла {material_file}: {e}")
+                await query.message.reply_text(f"Произошла ошибка при отправке файла {material_file}.")
+            except Exception as e:
+                logger.error(f"Неожиданная ошибка при отправке файла {material_file}: {e}")
+                await query.message.reply_text(f"Произошла непредвиденная ошибка при отправке файла {material_file}.")
+
+        await query.message.reply_text("Все предварительные материалы для следующего урока отправлены.")
+
+    except FileNotFoundError:
+        logger.error(f"Папка с файлами урока не найдена: {f'courses/{active_course_id}/{material_file}'}")
+        return []
+    except Exception as e:
+        logger.error(f"Ошибка при получении файлов урока: {e}")
+        return []
+
+# Обрабатывает нажатия на кнопки все
 async def button_handler(update: Update, context: CallbackContext):
     """Обрабатывает нажатия на кнопки."""
-    logger.info(f"{update.effective_user.id} - button_handler")
     query = update.callback_query
     data = query.data
+    logger.info(f"{update.effective_user.id} - button_handler")
     await query.answer()
 
     button_handlers = {
-        'get_current_lesson': show_lesson,  # <-- заменено на show_lesson
+        'get_current_lesson': get_current_lesson,
         'gallery': show_gallery,
-        'gallery_next': get_random_homework,
+        'gallery_next': lambda update, context: get_random_homework(update, context),
         'menu_back': show_main_menu,
         'support': show_support,
-        'profile': show_profile,
         'tariffs': show_tariffs,
         'course_settings': show_course_settings,
+        'statistics': show_statistics,
     }
-    if data.startswith('self_approve_'):
-        hw_id = int(data.split('_')[2])
-        await approve_homework(update, context, hw_id=hw_id)
-        await query.message.reply_text("ДЗ подтверждено. Переходим к следующему уроку!")
-    elif data.startswith('admin'):
-        data_split = data.split('_')
-        if len(data_split) > 1:
-            if data_split[1] == 'approve':
-                await handle_admin_approval(update, context)
-            elif data_split[1] == 'reject':
-                await handle_admin_rejection(update, context)
-    elif data.startswith('review'):
-        await show_homework(update, context)
-    elif data.startswith('repeat_lesson_'):
-        lesson_number = int(data.split('_')[1])
-        user_id = update.effective_user.id
 
-        # Получаем active_course_id из users
-        cursor.execute('SELECT active_course_id FROM users WHERE user_id = ?', (user_id,))
-        active_course_data = cursor.fetchone()
-
-        if not active_course_data or not active_course_data[0]:
-            await query.message.reply_text("Активируйте курс через кодовое слово.")
-            return
-
-        active_course_id = active_course_data[0]
-
-        # Получаем course_type из user_courses
-        cursor.execute('''
-            SELECT course_type
-            FROM user_courses
-            WHERE user_id = ? AND course_id = ?
-        ''', (user_id, active_course_id))
-        course_type_data = cursor.fetchone()
-
-        if not course_type_data:
-            await query.message.reply_text("Курс не найден.")
-            return
-
-        course_type = course_type_data[0]
-
-        # Отправляем урок
-        await send_lesson(update, context, active_course_id)
-        logger.info(f"Повторно отправляем урок {lesson_number} пользователю {user_id} курса {active_course_id}")
-    elif data.startswith("approve_hw"):
+    if data == 'preliminary_tasks':
+        await send_preliminary_material(update, context)
+    elif data.startswith('self_approve_'):
         try:
             hw_id = int(data.split('_')[2])
-            await approve_homework(update, context, hw_id=hw_id)
-        except (IndexError, ValueError):
-            logger.error(f"Неверный формат approve_hw callback_data: {data}")
-            await query.message.reply_text("Неверный формат запроса на подтверждение ДЗ.")
+            await approve_homework(update, context)
+            await query.message.reply_text("ДЗ подтверждено. Переходим к следующему уроку!")
+        except ValueError as e:
+            logger.error(f"ValueError in self_approve_ handler: {e}")
+            await query.message.reply_text(f"Ошибка в формате данных для подтверждения ДЗ: {query.data}")
+        except Exception as e:
+            logger.error(f"Error in self_approve_ handler: {e}")
+            await query.message.reply_text("Ошибка при подтверждении ДЗ. Попробуйте позже.")
+    elif data.startswith("approve_hw"):
+        try:
+            query = update.callback_query
+            hw_id = int(query.data.split('_')[2])  # Get hw_id from callback data
+            await approve_homework(update, context)
+        except ValueError as e:
+            logger.error(f"ValueError in approve_hw handler: {e}")
+            await query.message.reply_text(f"Неверный формат данных для подтверждения ДЗ: {query.data}")
+        except Exception as e:
+            logger.error(f"Error in approve_hw handler: {e}")
+            await query.message.reply_text("Ошибка при подтверждении ДЗ. Попробуйте позже.")
 
     elif data in button_handlers:
         handler = button_handlers[data]
         await handler(update, context)
-
-
-
+    else:
+        await query.message.reply_text("Неизвестная команда")
 
 
  #Обрабатывает текстовые сообщения. *
@@ -1406,7 +1596,6 @@ async def send_support_request_to_admin(update: Update, context: CallbackContext
         logger.error(f"Ошибка при отправке запроса в поддержку администратору: {e}")
         await update.message.reply_text("Произошла ошибка при отправке запроса. Попробуйте позже.")
 
-
 # Сохраняет имя пользователя и запрашивает кодовое слово *
 async def handle_name(update: Update, context: CallbackContext):
     """Сохраняет имя пользователя и запрашивает кодовое слово."""
@@ -1425,7 +1614,6 @@ async def handle_name(update: Update, context: CallbackContext):
     await update.message.reply_text(f"Отлично, {full_name}! Теперь введите кодовое слово для активации курса.")
     return WAIT_FOR_CODE
 
-
 # Обрабатывает отправленные пользователем документы *
 async def handle_document(update: Update, context: CallbackContext):
     """Обрабатывает отправленные пользователем документы."""
@@ -1434,16 +1622,9 @@ async def handle_document(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text("⚠️ Отправьте, пожалуйста, картинку или фотографию.")
 
-
 async def show_support(update: Update, context: CallbackContext):
     """Отображает информацию о поддержке."""
     await update.message.reply_text("Здесь будет информация о поддержке.")
-
-async def show_profile(update: Update, context: CallbackContext):
-    """Отображает профиль пользователя."""
-    await update.message.reply_text("Здесь будет профиль пользователя.")
-
-
 
 # Инициализация БД
 conn = sqlite3.connect('bot_db.sqlite', check_same_thread=False)
@@ -1475,8 +1656,11 @@ CREATE TABLE IF NOT EXISTS homeworks (
     status TEXT DEFAULT 'pending',
     feedback TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    lesson_sent_time DATETIME,
+    first_submission_time DATETIME,
     submission_time DATETIME,
     approval_time DATETIME,
+    final_approval_time DATETIME,
     admin_comment TEXT,
     FOREIGN KEY(user_id) REFERENCES users(user_id)
 );
@@ -1579,6 +1763,65 @@ async def send_reminders(context: CallbackContext):
             await context.bot.send_message(chat_id=user_id, text="🌅 Доброе утро! Не забудьте посмотреть материалы курса.")
         if evening and now == evening:
             await context.bot.send_message(chat_id=user_id, text="🌇 Добрый вечер! Не забудьте выполнить домашнее задание.")
+
+# Define a scheduler for sending lessons
+scheduler = AsyncIOScheduler()
+
+
+async def send_lesson_by_timer(user_id: int, context: CallbackContext):
+    """Send lesson to users by timer."""
+    logger.info(f"Sending lesson to user {user_id} at {datetime.now()}")
+
+    # Get active_course_id and progress
+    cursor.execute('SELECT active_course_id FROM users WHERE user_id = ?', (user_id,))
+    active_course_data = cursor.fetchone()
+
+    if not active_course_data or not active_course_data[0]:
+        await context.bot.send_message(chat_id=user_id, text="Пожалуйста, активируйте курс.")
+        return
+
+    active_course_id_full = active_course_data[0]
+    cursor.execute('''
+        SELECT progress
+        FROM user_courses
+        WHERE user_id = ? AND course_id = ?
+    ''', (user_id, active_course_id_full))
+    progress_data = cursor.fetchone()
+
+    if not progress_data:
+        await context.bot.send_message(chat_id=user_id, text="Не найден прогресс курса.")
+        return
+
+    lesson = progress_data[0]
+
+    # Update lesson_sent_time in the database
+    lesson_sent_time = datetime.now()
+    cursor.execute('''
+        INSERT INTO homeworks (user_id, course_id, lesson, lesson_sent_time)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, course_id, lesson) DO UPDATE SET lesson_sent_time = excluded.lesson_sent_time
+    ''', (user_id, active_course_id_full, lesson, lesson_sent_time))
+    conn.commit()
+
+    # Send the lesson materials
+    update = Update(1)
+    update.effective_user = context.bot.get_chat(user_id)
+    await show_lesson(update, context)
+
+
+# тута инициативно шлём уроки *
+def add_user_to_scheduler(user_id: int, time: datetime, context: CallbackContext):
+        """ Add user to send_lesson_by_timer with specific time"""
+        # Schedule the daily message
+        scheduler.add_job(
+            send_lesson_by_timer,
+            trigger="cron",
+            hour=time.hour,
+            minute=time.minute,
+            start_date=datetime.datetime.now(),
+            kwargs={"user_id": user_id, "context": context},
+            id=f"lesson_{user_id}",  # Unique ID for the job
+        )
 
 async def stats(update: Update, context: CallbackContext):
     # Активные пользователи за последние 3 дня
@@ -1684,89 +1927,111 @@ async def show_homework(update: Update, context: CallbackContext):
     await query.edit_message_text(f"Здесь будет галерея ДЗ по {lesson_number} уроку")
 
 # Функция для получения предварительных материалов
-def get_preliminary_materials(course, next_lesson):
-    try:
-        lesson_dir = f'courses/{course}/'
-        if not os.path.exists(lesson_dir):
-            return []
+def get_preliminary_materials(course_id, lesson):
+    """
+    Возвращает список всех предварительных материалов для урока.
+    """
+    lesson_dir = f'courses/{course_id}/'
+    materials = []
+    for filename in os.listdir(lesson_dir):
+        if filename.startswith(f'lesson{lesson}_p') and os.path.isfile(os.path.join(lesson_dir, filename)):
+            materials.append(filename)
+    materials.sort()  # Сортируем по порядку (p1, p2, ...)
+    return materials
 
-        return [
-            f for f in os.listdir(lesson_dir)
-            if f.startswith(f'lesson{next_lesson}_p')
-               and os.path.isfile(os.path.join(lesson_dir, f))
-        ]
-    except FileNotFoundError:
-        logger.error(f"Директория {lesson_dir} не найдена")
-        return []
+# проверим скока уроков всего
+def check_last_lesson(active_course_id):
+    """Checking amount of lessons"""
+    logger.info(f"check_last_lesson {active_course_id=}")
+    dir_path = f"courses/{active_course_id}"
+    count = 0
+    try:
+        for path in os.listdir(dir_path):
+            # check if current path is file
+            if os.path.isfile(os.path.join(dir_path, path)):
+                count += 1
+    except Exception as e:
+        logger.error(f"Error during checking  {e=}")
+    logger.warning(f"{count=}")
+    return count
 
 # Обработчик кнопки "Получить предварительные материалы"
 async def send_preliminary_material(update: Update, context: CallbackContext):
+    """Отправляет предварительные материалы для следующего урока."""
     query = update.callback_query
     await query.answer()
 
-    user_id = query.from_user.id
-    course_type = query.data.split('_')[1]  # Получаем тип курса из callback_data
-    course_prefix = course_type.split('_')[0]
+    user_id = update.effective_user.id
 
-    # Проверяем, какой урок следующий
-    cursor.execute(
-        f'SELECT {course_prefix}_current_lesson FROM users WHERE user_id = ?',
-        (user_id,)
-    )
-    current_lesson = cursor.fetchone()[0]
-    next_lesson = current_lesson + 1
+    try:
+        # Получаем active_course_id из users
+        cursor.execute('SELECT active_course_id FROM users WHERE user_id = ?', (user_id,))
+        active_course_data = cursor.fetchone()
 
-    # Получаем название курса
-    cursor.execute(f'SELECT {course_type}_course FROM users WHERE user_id = ?', (user_id,))
-    course = cursor.fetchone()[0]
+        if not active_course_data or not active_course_data[0]:
+            await query.message.reply_text("Активируйте курс через кодовое слово.")
+            return
 
-    # Получаем список предварительных материалов
-    materials = get_preliminary_materials(course, next_lesson)
+        active_course_id_full = active_course_data[0]
+        # Обрезаем название курса до первого символа "_"
+        active_course_id = active_course_id_full.split('_')[0]
 
-    if not materials:
-        await query.edit_message_text("Предварительные материалы для следующего урока отсутствуют.")
-        return
+        # Получаем progress (номер урока) из user_courses
+        cursor.execute('''
+            SELECT progress
+            FROM user_courses
+            WHERE user_id = ? AND course_id = ?
+        ''', (user_id, active_course_id_full))
+        progress_data = cursor.fetchone()
 
-    # Проверяем, сколько материалов уже отправлено
-    cursor.execute('SELECT preliminary_material_index FROM users WHERE user_id = ?', (user_id,))
-    material_index = cursor.fetchone()[0] or 0  # Индекс текущего материала
+        if not progress_data:
+            await query.message.reply_text("Не найден прогресс курса. Пожалуйста, начните курс сначала.")
+            return
 
-    if material_index >= len(materials):
-        await query.edit_message_text("Вы получили все предварительные материалы для следующего урока.")
-        return
+        lesson = progress_data[0]
+        next_lesson = lesson + 1
 
-    # Отправляем текущий материал
-    material_file = materials[material_index]
+        # Получаем список предварительных материалов
+        materials = get_preliminary_materials(active_course_id, next_lesson)
 
-    # Определяем тип файла
-    material_path = f'courses/{course}/{material_file}'
+        if not materials:
+            await query.message.reply_text("Предварительные материалы для следующего урока отсутствуют.")
+            return
 
-    if material_file.endswith('.jpg') or material_file.endswith('.png'):
-        await context.bot.send_photo(chat_id=user_id, photo=open(material_path, 'rb'))
-    elif material_file.endswith('.mp4'):
-        await context.bot.send_video(chat_id=user_id, video=open(material_path, 'rb'))
-    elif material_file.endswith('.mp3'):
-        await context.bot.send_audio(chat_id=user_id, audio=open(material_path, 'rb'))
-    else:
-        await context.bot.send_document(chat_id=user_id, document=open(material_path, 'rb'))
+        # Отправляем материалы
+        for material_file in materials:
+            material_path = f'courses/{active_course_id}/{material_file}'
 
-    # Увеличиваем индекс отправленных материалов
-    material_index += 1
-    cursor.execute('UPDATE users SET preliminary_material_index = ? WHERE user_id = ?', (material_index, user_id))
-    conn.commit()
+            # Определяем тип файла
+            try:
+                if material_file.endswith(('.jpg', '.jpeg', '.png', '.gif')):
+                    with open(material_path, 'rb') as photo_file:
+                        await context.bot.send_photo(chat_id=user_id, photo=photo_file)
+                elif material_file.endswith(('.mp4', '.avi', '.mov')):
+                    with open(material_path, 'rb') as video_file:
+                        await context.bot.send_video(chat_id=user_id, video=video_file)
+                elif material_file.endswith(('.mp3', '.wav', '.ogg')):
+                    with open(material_path, 'rb') as audio_file:
+                        await context.bot.send_audio(chat_id=user_id, audio=audio_file)
+                else:
+                    with open(material_path, 'rb') as document_file:
+                        await context.bot.send_document(chat_id=user_id, document=document_file)
+            except FileNotFoundError:
+                logger.error(f"Файл не найден: {material_path}")
+                await query.message.reply_text(f"Файл {material_file} не найден.")
+            except TelegramError as e:
+                logger.error(f"Ошибка при отправке файла {material_file}: {e}")
+                await query.message.reply_text(f"Произошла ошибка при отправке файла {material_file}.")
+            except Exception as e:
+                logger.error(f"Неожиданная ошибка при отправке файла {material_file}: {e}")
+                await query.message.reply_text(f"Произошла непредвиденная ошибка при отправке файла {material_file}.")
 
-    # Обновляем кнопку с количеством оставшихся материалов
-    remaining_materials = len(materials) - material_index
-    keyboard = [
-        [InlineKeyboardButton(f"Получить предварительные материалы к след уроку ({remaining_materials} осталось)",
-                              callback_data=f'preliminary_{course_type}')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("Все предварительные материалы для следующего урока отправлены.")
 
-    if remaining_materials > 0:
-        await query.edit_message_text("Материал отправлен. Хотите получить ещё?", reply_markup=reply_markup)
-    else:
-        await query.edit_message_text("Вы получили все предварительные материалы для следующего урока.")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке предварительных материалов: {e}")
+        await query.message.reply_text("Произошла ошибка при отправке предварительных материалов. Попробуйте позже.")
+
 
 # Функция для добавления кнопки "Получить предварительные материалы"
 async def add_preliminary_button(user_id, course_type):
@@ -1864,20 +2129,42 @@ def load_tariffs():
 
 # Отображает тарифы и акции. *
 async def show_tariffs(update: Update, context: CallbackContext):
-    """Отображает тарифы и акции."""
-    tariffs = load_tariffs()
+    """показывает акции и бонусы."""
+    try:
+        query = update.callback_query
+        await query.answer()
 
-    if not tariffs:
-        await update.message.reply_text("К сожалению, сейчас нет доступных акций.")
-        return
+        # Получаем все тарифы из файла tariffs.json
+        try:
+            with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
+                tariffs = json.load(f)
+        except FileNotFoundError:
+            logger.error(f"File not found: {TARIFFS_FILE}")
+            await context.bot.send_message(chat_id=query.message.chat_id, text="Cannot display tariffs. Please try later.")
+            return
+        except json.JSONDecodeError:
+            logger.error(f"File not found: {TARIFFS_FILE}")
+            await  context.bot.send_message(chat_id=query.message.chat_id, text="Cannot display tariffs. Please try later.")
+            return
 
-    keyboard = []
-    for tariff in tariffs:
-        keyboard.append(
-            [InlineKeyboardButton(f"{tariff['emoji']} {tariff['title']}", callback_data=f"tariff_{tariff['id']}")])
+        # Формируем кнопки для каждого тарифа
+        keyboard = []
+        for tariff in tariffs:
+            if 'name' not in tariff:
+                logger.error(f"Tariff {tariff} missing 'name' key")
+                await context.bot.send_message(chat_id=query.message.chat_id, text="Tariff info is wrong. Please try later.")
+                return
+            keyboard.append([InlineKeyboardButton(tariff['name'], callback_data=f"tariff_{tariff['id']}")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Выберите интересующую вас акцию:", reply_markup=reply_markup)
+        await context.bot.send_message(chat_id=query.message.chat_id, text="Here new tariffs:", reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Error during show tariff: {e}")
+        if query and query.message:
+            await context.bot.send_message(chat_id=query.message.chat_id, text="Something went wrong.")
+        else:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="Something went wrong.")
+
 
 # Обрабатывает выбор тарифа. *
 async def tariff_callback(update: Update, context: CallbackContext):
@@ -2244,11 +2531,6 @@ async def get_next_lesson_time(user_id):
         return "время пока не определено"
 
 
-
-
-
-
-
 async def show_gallery(update: Update, context: CallbackContext):
     await get_random_homework(update, context)
 
@@ -2259,6 +2541,7 @@ async def get_gallery_count():
     cursor.execute('SELECT COUNT(*) FROM homeworks WHERE status = "approved"')
     return cursor.fetchone()[0]
 
+# галерейка
 async def get_random_homework(update: Update, context: CallbackContext):
     query = update.callback_query
     if query:
@@ -2413,6 +2696,9 @@ def main():
     application.add_handler(CommandHandler("stats", stats))
 
     application.add_handler(CallbackQueryHandler(button_handler))
+
+    # Start the scheduler
+    scheduler.start()
 
     application.run_polling()
 
