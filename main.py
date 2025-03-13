@@ -85,8 +85,6 @@ persistence = PicklePersistence(filepath="bot_data.pkl")
 ) = range(11)
 
 
-
-
 # Регулярное выражение для извлечения времени задержки из имени файла
 DELAY_PATTERN = re.compile(r"_(\d+)([mh])$")
 
@@ -97,6 +95,32 @@ DEFAULT_LESSON_DELAY_HOURS = 3
 
 logger.info(f"{DEFAULT_LESSON_DELAY_HOURS=} {DEFAULT_LESSON_INTERVAL=} время старта {time.strftime('%d/%m/%Y %H:%M:%S')}")
 
+PAYMENT_INFO_FILE = "payment_info.json"
+
+# кому платить
+def load_payment_info(filename):
+    """Загружает данные об оплате из JSON файла."""
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            logger.info(f"Файл с данными об оплате: {filename}")
+            return data
+    except FileNotFoundError:
+        logger.error(f"Файл с данными об оплате не найден: {filename}")
+        return {}
+    except json.JSONDecodeError:
+        logger.error(f"Ошибка при чтении JSON файла: {filename}")
+        return {}
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке данных об оплате: {e}")
+        return {}
+
+PAYMENT_INFO = load_payment_info(PAYMENT_INFO_FILE)
+
+async def handle_error(update: Update, context: CallbackContext, error: Exception):
+    """Handles errors that occur in the bot."""
+    logger.error(f"Error: {error}")
+    await update.message.reply_text("Произошла ошибка. Попробуйте позже.")
 
 # получение имени и проверка *
 async def handle_user_info(update: Update, context: CallbackContext):
@@ -148,6 +172,7 @@ async def handle_user_info(update: Update, context: CallbackContext):
         return WAIT_FOR_NAME
 
 # проверка оплаты через кодовые слова *
+# проверка оплаты через кодовые слова *
 async def handle_code_words(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     user_code = update.message.text.strip()
@@ -165,17 +190,21 @@ async def handle_code_words(update: Update, context: CallbackContext):
         # Отправляем сообщение
         await update.message.reply_text("Курс активирован! Вы переходите в главное меню.")
 
-        # Показываем главное меню
-        await show_main_menu(update, context)
-
         # Сбрасываем состояние ожидания кодового слова
         context.user_data['waiting_for_code'] = False
 
         return ACTIVE  # Переходим в состояние ACTIVE
+    else:
+        # Неверное кодовое слово
+        logger.info(f" Неверное кодовое слово. ")
+        await update.message.reply_text("Неверное кодовое слово. Попробуйте еще раз.")
+        return WAIT_FOR_CODE
+
 
     # Неверное кодовое слово
     await update.message.reply_text("Неверное кодовое слово. Попробуйте еще раз.")
     return WAIT_FOR_CODE
+
 
 # текущий урок заново
 async def get_current_lesson(update: Update, context: CallbackContext):
@@ -201,6 +230,10 @@ async def get_current_lesson(update: Update, context: CallbackContext):
         active_course_id = active_course_id_full.split('_')[0]
         logger.info(f" active_course_id {active_course_id} +")
 
+        # Получаем course_type и tariff из context.user_data
+        course_type = context.user_data.get('course_type', 'main')
+        tariff = context.user_data.get('tariff', 'self_check')
+
         # Получаем progress (номер урока) из user_courses
         cursor.execute('''
             SELECT progress
@@ -215,8 +248,7 @@ async def get_current_lesson(update: Update, context: CallbackContext):
             cursor.execute('''
                 INSERT INTO user_courses (user_id, course_id, course_type, progress, tariff)
                 VALUES (?, ?, ?, ?, ?)
-            ''', (user_id, active_course_id_full, 'main', lesson, 'self_check'))
-            # TODO Замени 'main' и 'self_check' на актуальные значения
+            ''', (user_id, active_course_id_full, course_type, lesson, tariff))
 
             conn.commit()
             logger.warning(f" get_current_lesson с 1 урока начали на нижнем тарифе (самый быстрый) {active_course_id_full=}")
@@ -272,8 +304,7 @@ async def get_current_lesson(update: Update, context: CallbackContext):
                     time_release = datetime.datetime.now() + delay_time
 
                     delay_text = f"Материал станет доступен через {delay_time} ({time_release.strftime('%H:%M:%S')})"
-                    await context.bot.send_message(chat_id=user_id, text=delay_text )
-
+                    await context.bot.send_message(chat_id=user_id, text=delay_text)
 
             except FileNotFoundError:
                 logger.error(f"Media file not found: {file_path}")
@@ -295,7 +326,6 @@ async def get_current_lesson(update: Update, context: CallbackContext):
 
         # и показываем меню чтоб далеко не тянуться
         await show_main_menu(update, context)
-
 
     except Exception as e:
         logger.error(f"Ошибка при получении текущего урока: {e}")
@@ -409,8 +439,6 @@ async def show_main_menu(update: Update, context: CallbackContext):
         else:
             await update.message.reply_text("Error display menu. Try later.")
 
-
-
 async def course_completion_actions(update: Update, context: CallbackContext):
     """Actions to perform upon course completion."""
     user_id = update.effective_user.id
@@ -462,8 +490,6 @@ def generate_lesson_keyboard(lessons, items_per_page=10):
     for lesson in lessons:
         keyboard.append([InlineKeyboardButton(f'Lesson {lesson}', callback_data=f'lesson_{lesson}')])  # type: ignore
     return keyboard
-
-
 
 # домашка ???
 async def get_homework_status_text(user_id, course_id):
@@ -1132,7 +1158,6 @@ async def format_progress(user_id, course_id):
     # Return full value
     return f'Lesson {progress} {skipped_text}'
 
-
 # "Отображает историю домашних заданий пользователя
 async def hw_history(update: Update, context: CallbackContext):
     """Отображает историю домашних заданий пользователя."""
@@ -1162,6 +1187,46 @@ async def hw_history(update: Update, context: CallbackContext):
     except Exception as e:
         logger.error(f"Ошибка при отображении истории ДЗ: {e}")
         await update.callback_query.message.reply_text("Произошла ошибка при отображении истории домашних заданий. Попробуйте позже.")
+
+async def handle_check_payment(update: Update, context: CallbackContext, tariff_id: str):
+    """Handles the "I Paid" button."""
+    query = update.callback_query
+    user_id = update.effective_user.id
+
+    try:
+        # Load tariffs from file
+        with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
+            tariffs = json.load(f)
+
+        # Find selected tariff
+        selected_tariff = next((tariff for tariff in tariffs if tariff['id'] == tariff_id), None)
+
+        if selected_tariff:
+            logger.info(f"Handling check payment for tariff: {selected_tariff}")
+
+            # Отправляем уведомление администратору
+            message = f"Пользователь {user_id} запросил проверку оплаты тарифа {selected_tariff['title']}"
+            keyboard = [
+                [InlineKeyboardButton("Одобрить", callback_data=f"approve_payment_{user_id}_{tariff_id}")],
+                [InlineKeyboardButton("Отклонить", callback_data=f"decline_payment_{user_id}_{tariff_id}")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            for admin_id in ADMIN_IDS:
+                await context.bot.send_message(chat_id=admin_id, text=message, reply_markup=reply_markup)
+            await query.message.reply_text("Ваш запрос на проверку оплаты отправлен администратору.")
+
+        else:
+            logger.warning(f"Tariff with id {tariff_id} not found.")
+            await query.message.reply_text("Выбранный тариф не найден.")
+    except Exception as e:
+        logger.error(f"Error handling check payment: {e}")
+        await query.message.reply_text("Произошла ошибка при проверке оплаты. Попробуйте позже.")
+
+
+# галерея
+async def show_gallery(update: Update, context: CallbackContext):
+    logger.info(f"show_gallery -------------<")
+    await get_random_homework(update, context)
 
 # Устанавливает выбранный тариф для пользователя
 async def set_tariff(update: Update, context: CallbackContext):
@@ -1196,6 +1261,71 @@ async def set_tariff(update: Update, context: CallbackContext):
     except Exception as e:
         logger.error(f"Ошибка при установке тарифа: {e}")
         await query.message.reply_text("Произошла ошибка при установке тарифа. Попробуйте позже.")
+
+async def show_support(update: Update, context: CallbackContext):
+    """Отображает информацию о поддержке."""
+    await update.message.reply_text("Здесь будет информация о поддержке.")
+
+async def handle_approve_payment(update: Update, context: CallbackContext, user_id: str, tariff_id: str):
+    """Handles the "Approve Payment" button."""
+    query = update.callback_query
+    admin_id = update.effective_user.id
+
+    try:
+        # Load tariffs from file
+        with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
+            tariffs = json.load(f)
+
+        # Find selected tariff
+        selected_tariff = next((tariff for tariff in tariffs if tariff['id'] == tariff_id), None)
+
+        if selected_tariff:
+            logger.info(f"Handling approve payment for tariff: {selected_tariff}")
+
+            # Add logic for activating the tariff for the user here
+            # This could involve updating the user's subscription status,
+            # adding the user to a course, etc.
+
+            await query.edit_message_text(f"Оплата тарифа {selected_tariff['title']} для пользователя {user_id} одобрена администратором {admin_id}.")
+            await context.bot.send_message(chat_id=user_id, text=f"Ваша оплата тарифа {selected_tariff['title']} подтверждена. Теперь вам доступны все материалы курса.")
+
+        else:
+            logger.warning(f"Tariff with id {tariff_id} not found.")
+            await query.message.reply_text("Выбранный тариф не найден.")
+    except Exception as e:
+        logger.error(f"Error handling approve payment: {e}")
+        await query.message.reply_text("Произошла ошибка при одобрении оплаты. Попробуйте позже.")
+
+async def handle_decline_payment(update: Update, context: CallbackContext, user_id: str, tariff_id: str):
+    """Handles the "Decline Payment" button."""
+    query = update.callback_query
+    admin_id = update.effective_user.id
+
+    try:
+        # Load tariffs from file
+        with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
+            tariffs = json.load(f)
+
+        # Find selected tariff
+        selected_tariff = next((tariff for tariff in tariffs if tariff['id'] == tariff_id), None)
+
+        if selected_tariff:
+            logger.info(f"Handling decline payment for tariff: {selected_tariff}")
+
+            # Add logic for declining the payment for the user here
+            # This could involve sending the user a refund,
+            # notifying the user that their payment has been declined, etc.
+
+            await query.edit_message_text(f"Оплата тарифа {selected_tariff['title']} для пользователя {user_id} отклонена администратором {admin_id}.")
+            await context.bot.send_message(chat_id=user_id, text=f"Ваша оплата тарифа {selected_tariff['title']} отклонена. Обратитесь в службу поддержки.")
+
+        else:
+            logger.warning(f"Tariff with id {tariff_id} not found.")
+            await query.message.reply_text("Выбранный тариф не найден.")
+    except Exception as e:
+        logger.error(f"Error handling decline payment: {e}")
+        await query.message.reply_text("Произошла ошибка при отклонении оплаты. Попробуйте позже.")
+
 
 # Отображает настройки курса *
 async def show_course_settings(update: Update, context: CallbackContext):
@@ -1234,6 +1364,50 @@ async def show_course_settings(update: Update, context: CallbackContext):
         else:
             logger.error("Не удалось определить источник вызова функции show_course_settings при ошибке")
             return
+
+# Отображает тарифы и акции. *
+async def show_tariffs(update: Update, context: CallbackContext):
+    """показывает акции и бонусы."""
+    logger.info(f"show_tariffs --------------------- 222")
+    try:
+        query = update.callback_query
+        await query.answer()
+
+        # Загружаем тарифы из файла
+        try:
+            with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
+                tariffs = json.load(f)
+                logger.info(f"show_tariffs -  {tariffs}-------------------- 222")
+        except FileNotFoundError:
+            logger.error(f"File not found: {TARIFFS_FILE}")
+            await context.bot.send_message(chat_id=query.message.chat_id,
+                                           text="Cannot display tariffs. Please try later.")
+            return
+        except json.JSONDecodeError:
+            logger.error(f"Ошибка чтения JSON файла: {TARIFFS_FILE}")
+            await context.bot.send_message(chat_id=query.message.chat_id,
+                                           text="Cannot display tariffs. Please try later.")
+            return
+
+        # Формируем кнопки для каждого тарифа
+        keyboard = []
+        logger.info(f"show_tariffs3 ------------------- 333")
+        for tariff in tariffs:
+            if 'title' not in tariff:
+                logger.error(f"Tariff missing 'title' key: {tariff.get('id', 'Unknown')}")
+                continue
+            callback_data = f"tariff_{tariff['id']}"  # Передаем полный ID тарифа
+            keyboard.append([InlineKeyboardButton(tariff['title'], callback_data=callback_data)])
+
+        keyboard.append([InlineKeyboardButton("Назад", callback_data="menu_back")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        logger.info(f"show_tariffs4  готово ------------------- 333")
+
+        await context.bot.send_message(chat_id=query.message.chat_id, text="Вот доступные тарифы и бонусы:",
+                                       reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Error during show tariffs: {e}")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Something went wrong.")
 
 # "Показывает текст урока по запросу."*
 async def show_lesson(update: Update, context: CallbackContext):
@@ -1450,6 +1624,7 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
     await query.answer()
 
     user_id = update.effective_user.id
+    logger.info(f"send_preliminary_material ")
 
 
     # Получаем active_course_id из users
@@ -1525,7 +1700,70 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
         logger.error(f"Ошибка при получении файлов урока: {e}")
         return []
 
+async def handle_go_to_payment(update: Update, context: CallbackContext, tariff_id: str):
+    """Handles the "Go to Payment" button."""
+    query = update.callback_query
+    user_id = update.effective_user.id
+    logger.info(f"handle_go_to_payment")
+    try:
+        # Load tariffs from file
+        with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
+            tariffs = json.load(f)
+
+        # Find selected tariff
+        selected_tariff = next((tariff for tariff in tariffs if tariff['id'] == tariff_id), None)
+
+        if selected_tariff:
+            logger.info(f"Handling go to payment for tariff: {selected_tariff}")
+
+            # Get payment information
+            phone_number = PAYMENT_INFO.get('phone_number')
+            name = PAYMENT_INFO.get('name')
+            payment_message = PAYMENT_INFO.get('payment_message')
+            amount = selected_tariff.get('price')
+
+            if not phone_number or not name or not payment_message or not amount:
+                logger.error("Missing payment information.")
+                await query.message.reply_text("Произошла ошибка. Не удалось получить информацию об оплате.")
+                return
+
+            # Format payment message
+            formatted_message = payment_message.format(amount=amount)
+
+            # Create keyboard
+            keyboard = [
+                [InlineKeyboardButton("Я оплатил", callback_data=f"check_payment_{tariff_id}")],
+                [InlineKeyboardButton("Назад к тарифам", callback_data="tariffs")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            # Send message with payment information
+            await query.edit_message_text(
+                text=f"{formatted_message}\nНомер телефона: {phone_number}\nИмя: {name}",
+                reply_markup=reply_markup
+            )
+        else:
+            logger.warning(f"Tariff with id {tariff_id} not found.")
+            await query.message.reply_text("Выбранный тариф не найден.")
+    except Exception as e:
+        logger.error(f"Error handling go to payment: {e}")
+        await query.message.reply_text("Произошла ошибка при переходе к оплате. Попробуйте позже.")
+
+
+
 # Обрабатывает нажатия на кнопки все
+button_handlers = {
+    'get_current_lesson': get_current_lesson,
+    'gallery': show_gallery,
+    'gallery_next': lambda update, context: get_random_homework(update, context),
+    'menu_back': show_main_menu,
+    'support': show_support,
+    'tariffs': show_tariffs,
+    'course_settings': show_course_settings,
+    'statistics': show_statistics,
+    'preliminary_tasks': send_preliminary_material,
+}
+
 async def button_handler(update: Update, context: CallbackContext):
     """Handles button presses."""
     query = update.callback_query
@@ -1533,40 +1771,134 @@ async def button_handler(update: Update, context: CallbackContext):
     logger.info(f"{update.effective_user.id} - button_handler")
     await query.answer()
 
-    # Check for tariff selection first
-    if data.startswith('tariff_'):
-        logger.info(f" 777 данные {data} ==================")
-        # Извлекаем tariff_id, разделяя строку только один раз
-        try:
+    try:
+        if data.startswith('check_payment_'):
+            # Handle "I Paid" button
+            tariff_id = data.split('_')[2]
+            await handle_check_payment(update, context, tariff_id)
+            return
+
+        elif data.startswith('approve_payment_'):
+            # Handle "Approve Payment" button
+            user_id, tariff_id = data.split('_')[2], data.split('_')[3]
+            await handle_approve_payment(update, context, user_id, tariff_id)
+            return
+        elif data.startswith('decline_payment_'):
+            # Handle "Decline Payment" button
+            user_id, tariff_id = data.split('_')[2], data.split('_')[3]
+            await handle_decline_payment(update, context, user_id, tariff_id)
+            return
+
+        # Check for tariff selection first
+        if data.startswith('tariff_'):
+            logger.info(f" 777 данные {data} ==================")
+            # Извлекаем tariff_id, разделяя строку только один раз
             tariff_id = data.split('_', 1)[1]
             logger.info(f" handler для handle_tariff_selection {tariff_id}")
-        except IndexError:
-            logger.error(f"Не удалось извлечь tariff_id из data: {data} ====== 8888")
-            await query.message.reply_text("Произошла ошибка. Попробуйте позже.")
-            return
-        await handle_tariff_selection(update, context, tariff_id)
-    # Then check for other known button handlers
-    else:
-        button_handlers = {
-            'get_current_lesson': get_current_lesson,
-            'gallery': show_gallery,
-            'gallery_next': lambda update, context: get_random_homework(update, context),
-            'menu_back': show_main_menu,
-            'support': show_support,
-            'tariffs': show_tariffs,
-            'course_settings': show_course_settings,
-            'statistics': show_statistics,
-            'preliminary_tasks': send_preliminary_material, # Add preliminary tasks
-        }
-
-        if data in button_handlers:
+            await handle_tariff_selection(update, context, tariff_id)
+        elif data.startswith('buy_tariff_'):
+            # Handle "Buy" button
+            tariff_id = data.split('_', 2)[2]
+            logger.info(f" handler для handle_buy_tariff {tariff_id}")
+            await handle_buy_tariff(update, context, tariff_id)
+        elif data.startswith('go_to_payment_'):
+            # Handle "Go to Payment" button
+            tariff_id = data.split('_', 2)[2]
+            logger.info(f" handler для handle_go_to_payment {tariff_id}")
+            await handle_go_to_payment(update, context, tariff_id)
+        elif data in button_handlers:
             handler = button_handlers[data]
             await handler(update, context)
         else:
             await query.message.reply_text("Unknown command")
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        await query.message.reply_text("Произошла ошибка. Попробуйте позже.")
+
+
+async def handle_buy_tariff(update: Update, context: CallbackContext, tariff_id: str):
+    """Обрабатывает нажатие на кнопку 'Купить'."""
+    query = update.callback_query
+    user_id = update.effective_user.id
+
+    logger.info(f"handle_buy_tariff: tariff_id={tariff_id}, user_id={user_id}")
+
+    try:
+        # Загружаем тарифы из файла
+        try:
+            with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
+                tariffs = json.load(f)
+            logger.info(f"handle_buy_tariff: Tariffs data loaded from {TARIFFS_FILE}")
+        except FileNotFoundError:
+            logger.error(f"handle_buy_tariff: Файл {TARIFFS_FILE} не найден.")
+            await query.message.reply_text("Произошла ошибка: файл с тарифами не найден.")
+            return
+        except json.JSONDecodeError as e:
+            logger.error(f"handle_buy_tariff: Ошибка при чтении JSON из файла {TARIFFS_FILE}: {e}")
+            await query.message.reply_text("Произошла ошибка: не удалось прочитать данные о тарифах.")
+            return
+        except Exception as e:
+            logger.error(f"handle_buy_tariff: Непредвиденная ошибка при загрузке тарифов: {e}")
+            await query.message.reply_text("Произошла непредвиденная ошибка. Попробуйте позже.")
+            return
+
+        # Ищем выбранный тариф
+        selected_tariff = next((tariff for tariff in tariffs if tariff['id'] == tariff_id), None)
+
+        if selected_tariff:
+            logger.info(f"handle_buy_tariff: Найден тариф: {selected_tariff}")
+
+            # Загружаем информацию об оплате
+            payment_info = load_payment_info(PAYMENT_INFO_FILE)
+
+            if not payment_info:
+                logger.error("handle_buy_tariff: Не удалось загрузить информацию об оплате.")
+                await query.message.reply_text("Произошла ошибка: не удалось получить информацию об оплате.")
+                return
+
+            phone_number = payment_info.get('phone_number')
+            name = payment_info.get('name')
+            payment_message = payment_info.get('payment_message')
+            amount = selected_tariff.get('price')
+
+            if not all([phone_number, name, payment_message, amount]):
+                logger.error("handle_buy_tariff: Отсутствует необходимая информация для оплаты.")
+                await query.message.reply_text("Произошла ошибка: отсутствует необходимая информация для оплаты.")
+                return
+
+            # Форматируем сообщение об оплате
+            formatted_message = payment_message.format(amount=amount)
+
+            # Создаем кнопки
+            keyboard = [
+                [InlineKeyboardButton("Я оплатил", callback_data=f"check_payment_{tariff_id}")],
+                [InlineKeyboardButton("Назад к тарифам", callback_data="tariffs")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            # Отправляем сообщение с информацией об оплате
+            payment_info_message = (
+                f"Для оплаты тарифа '{selected_tariff['title']}' выполните следующие действия:\n\n"
+                f"{formatted_message}\n"
+                f"Номер телефона: {phone_number}\n"
+                f"Имя получателя: {name}\n\n"
+                f"После оплаты нажмите кнопку 'Я оплатил'."
+            )
+
+            await query.edit_message_text(payment_info_message, reply_markup=reply_markup)
+            logger.info(f"handle_buy_tariff: Сообщение об оплате отправлено пользователю {user_id}")
+        else:
+            logger.warning(f"handle_buy_tariff: Тариф с id '{tariff_id}' не найден.")
+            await query.message.reply_text("Выбранный тариф не найден. Пожалуйста, выберите тариф снова.")
+
+    except Exception as e:
+        logger.exception(f"handle_buy_tariff: Непредвиденная ошибка при обработке покупки: {e}")
+        await query.message.reply_text("Произошла непредвиденная ошибка при обработке покупки. Попробуйте позже.")
+
 
 # выбор товара в магазине *
 async def handle_tariff_selection(update: Update, context: CallbackContext, tariff_id: str):
+    """Handles the selection of a tariff."""
     query = update.callback_query
     user_id = update.effective_user.id
     logger.info(f"  handle_tariff_selection --------------------------------")
@@ -1575,29 +1907,12 @@ async def handle_tariff_selection(update: Update, context: CallbackContext, tari
         with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
             tariffs = json.load(f)
 
-        # Логирование для проверки содержимого tariffs
-        logger.info(f"Available tariff IDs: {[tariff['id'] for tariff in tariffs]}")
-
-        # Логирование непосредственно перед поиском тарифа
-        logger.info(f"Searching for tariff with id: {tariff_id}")
-        logger.info(f"Tariffs data: {tariffs} -----------------------------")
-
-        selected_tariff = None
-        for tariff in tariffs:
-            # Добавим логирование значений tariff['id'] и tariff_id
-            logger.info(f"Comparing tariff['id'] = {tariff['id']} with tariff_id = {tariff_id}")
-            if tariff['id'] == tariff_id:
-                selected_tariff = tariff
-                break
-        logger.info(f"  handle_tariff_selection 2 {selected_tariff=} ")
-
-        # Добавим логирование после попытки найти тариф
-        if selected_tariff:
-            logger.info(f"Selected tariff: {selected_tariff}")
-        else:
-            logger.warning(f"Tariff with id {tariff_id} not found.")
+        # Find selected tariff
+        selected_tariff = next((tariff for tariff in tariffs if tariff['id'] == tariff_id), None)
 
         if selected_tariff:
+            logger.info(f"Selected tariff: {len(selected_tariff)}")
+
             message = f"Вы выбрали: {selected_tariff['title']}\n\n{selected_tariff['description']}"
 
             if selected_tariff['type'] == 'discount':
@@ -1605,14 +1920,18 @@ async def handle_tariff_selection(update: Update, context: CallbackContext, tari
             elif selected_tariff['type'] == 'payment':
                 message += f"\n\nЦена: {selected_tariff['price']} руб."
 
-            keyboard = [[InlineKeyboardButton("Купить", callback_data=f"buy_{tariff_id}")],
-                        [InlineKeyboardButton("Назад к тарифам", callback_data="tariffs")]]
+            # Create buttons for "Buy" and "Back to Tariffs"
+            keyboard = [
+                [InlineKeyboardButton("Купить", callback_data=f"buy_tariff_{tariff_id}")],
+                [InlineKeyboardButton("Назад к тарифам", callback_data="tariffs")]
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await query.message.edit_text(message, reply_markup=reply_markup)
+            # Edit message with tariff information and buttons
+            await query.edit_message_text(text=message, reply_markup=reply_markup)
         else:
-            logger.warning(f"Tariff with id {tariff_id} not found.")
-            await query.message.reply_text("Выбранный тариф не найден.")
+            logger.warning(f"Tariff 2 with id {tariff_id} not found.")
+            await query.message.reply_text("Выбранный 2 тариф не найден.")
     except Exception as e:
         logger.error(f"Error handling tariff selection: {e}")
         await query.message.reply_text("Произошла ошибка при выборе тарифа. Попробуйте позже.")
@@ -1721,9 +2040,7 @@ async def handle_document(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text("⚠️ Отправьте, пожалуйста, картинку или фотографию.")
 
-async def show_support(update: Update, context: CallbackContext):
-    """Отображает информацию о поддержке."""
-    await update.message.reply_text("Здесь будет информация о поддержке.")
+
 
 # Инициализация БД
 conn = sqlite3.connect('bot_db.sqlite', check_same_thread=False)
@@ -1906,7 +2223,6 @@ async def send_lesson_by_timer(user_id: int, context: CallbackContext):
     update = Update(1)
     update.effective_user = context.bot.get_chat(user_id)
     await show_lesson(update, context)
-
 
 # тута инициативно шлём уроки *
 def add_user_to_scheduler(user_id: int, time: datetime, context: CallbackContext):
@@ -2223,51 +2539,6 @@ def load_tariffs():
         logger.error(f"Ошибка декодирования JSON в файле {TARIFFS_FILE}.")
         return []
 
-# Отображает тарифы и акции. *
-async def show_tariffs(update: Update, context: CallbackContext):
-    """показывает акции и бонусы."""
-    logger.info(f"show_tariffs --------------------- 222")
-    try:
-        query = update.callback_query
-        await query.answer()
-
-        # Загружаем тарифы из файла
-        try:
-            with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
-                tariffs = json.load(f)
-                logger.info(f"show_tariffs -  {tariffs}-------------------- 222")
-        except FileNotFoundError:
-            logger.error(f"File not found: {TARIFFS_FILE}")
-            await context.bot.send_message(chat_id=query.message.chat_id,
-                                           text="Cannot display tariffs. Please try later.")
-            return
-        except json.JSONDecodeError:
-            logger.error(f"Ошибка чтения JSON файла: {TARIFFS_FILE}")
-            await context.bot.send_message(chat_id=query.message.chat_id,
-                                           text="Cannot display tariffs. Please try later.")
-            return
-
-        # Формируем кнопки для каждого тарифа
-        keyboard = []
-        logger.info(f"show_tariffs3 ------------------- 333")
-        for tariff in tariffs:
-            if 'title' not in tariff:
-                logger.error(f"Tariff missing 'title' key: {tariff.get('id', 'Unknown')}")
-                continue
-            callback_data = f"tariff_{tariff['id']}"  # Передаем полный ID тарифа
-            keyboard.append([InlineKeyboardButton(tariff['title'], callback_data=callback_data)])
-
-        keyboard.append([InlineKeyboardButton("Назад", callback_data="menu_back")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        logger.info(f"show_tariffs4  готово ------------------- 333")
-
-        await context.bot.send_message(chat_id=query.message.chat_id, text="Вот доступные тарифы и бонусы:",
-                                       reply_markup=reply_markup)
-    except Exception as e:
-        logger.error(f"Error during show tariffs: {e}")
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="Something went wrong.")
-
-
 
 
 # Обрабатывает выбор тарифа. *
@@ -2543,7 +2814,6 @@ async def process_check(update: Update, context: CallbackContext):
     context.user_data.clear()  # Очищаем context.user_data
     return ConversationHandler.END
 
-
 # Обрабатывает User ID получателя подарка. *
 async def process_gift_user_id(update: Update, context: CallbackContext):
     """Обрабатывает User ID получателя подарка."""
@@ -2591,7 +2861,6 @@ async def process_phone_number(update: Update, context: CallbackContext):
     context.user_data.clear()  # Очищаем context.user_data
     return ConversationHandler.END
 
-
 async def get_next_lesson_time(user_id):
     """Получает время следующего урока из базы данных."""
     try:
@@ -2635,11 +2904,6 @@ async def get_next_lesson_time(user_id):
     except Exception as e:
         logger.error(f"Ошибка при получении времени следующего урока: {e}")
         return "время пока не определено"
-
-
-async def show_gallery(update: Update, context: CallbackContext):
-    logger.info(f"show_gallery -------------<")
-    await get_random_homework(update, context)
 
 async def get_gallery_count():
     """
