@@ -1,5 +1,4 @@
 import logging
-import time
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.ext import PicklePersistence
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaDocument, \
@@ -8,12 +7,12 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
     CallbackQueryHandler, ConversationHandler
 import sqlite3
 from datetime import datetime, timedelta
+import time
 from dotenv import load_dotenv
 import os
 import re
 import asyncio
 from telegram.error import TelegramError
-import datetime
 import json
 
 
@@ -183,6 +182,7 @@ async def handle_code_words(update: Update, context: CallbackContext):
     if user_code in COURSE_DATA:
         # Активируем курс
         await activate_course(update, context, user_id, user_code)
+        logger.info(f" активирован {user_id}  return ACTIVE ")
 
         # Отправляем текущий урок
         await get_current_lesson(update, context)
@@ -193,17 +193,13 @@ async def handle_code_words(update: Update, context: CallbackContext):
         # Сбрасываем состояние ожидания кодового слова
         context.user_data['waiting_for_code'] = False
 
+
         return ACTIVE  # Переходим в состояние ACTIVE
     else:
         # Неверное кодовое слово
-        logger.info(f" Неверное кодовое слово. ")
+        logger.info(f" Неверное кодовое слово.   return WAIT_FOR_CODE")
         await update.message.reply_text("Неверное кодовое слово. Попробуйте еще раз.")
         return WAIT_FOR_CODE
-
-
-    # Неверное кодовое слово
-    await update.message.reply_text("Неверное кодовое слово. Попробуйте еще раз.")
-    return WAIT_FOR_CODE
 
 
 # текущий урок заново
@@ -300,8 +296,8 @@ async def get_current_lesson(update: Update, context: CallbackContext):
                         await context.bot.send_document(chat_id=user_id, document=file)
                         # Отправляем информацию о задержке
                 if delay > 0:
-                    delay_time = datetime.timedelta(seconds=delay)
-                    time_release = datetime.datetime.now() + delay_time
+                    delay_time = timedelta(seconds=delay)
+                    time_release = datetime.now() + delay_time
 
                     delay_text = f"Материал станет доступен через {delay_time} ({time_release.strftime('%H:%M:%S')})"
                     await context.bot.send_message(chat_id=user_id, text=delay_text)
@@ -319,7 +315,7 @@ async def get_current_lesson(update: Update, context: CallbackContext):
 
         # Calculate the default release time of the next lesson
         next_lesson = lesson + 1
-        next_lesson_release_time = datetime.datetime.now() + datetime.timedelta(hours=DEFAULT_LESSON_INTERVAL)
+        next_lesson_release_time = datetime.now() + timedelta(hours=DEFAULT_LESSON_INTERVAL)
         next_lesson_release_str = next_lesson_release_time.strftime("%d-%m-%Y %H:%M:%S")
         await context.bot.send_message(chat_id=user_id, text=f"След урок {next_lesson} будет в {next_lesson_release_str}")
         logger.info(f" 555 След урок {next_lesson} будет в {next_lesson_release_str}")
@@ -393,10 +389,10 @@ async def show_main_menu(update: Update, context: CallbackContext):
         else:
             state_emoji = "✅"  # Checkmark for other states
 
-
+        progress_text = f"Текущий урок: {progress}" if progress else "Прогресс отсутствует"
         greeting = f"""Приветствую, {full_name.split()[0]}! {state_emoji}
         Курс: {active_course_id} ({course_type}) {active_tariff}
-        Прогресс: {await format_progress(user.id, active_course_id)}
+        Прогресс: {progress_text}
         Домашка: {homework}"""
         # Make buttons
         keyboard = [
@@ -438,6 +434,55 @@ async def show_main_menu(update: Update, context: CallbackContext):
             await update.callback_query.message.reply_text("Error display menu. Try later.")
         else:
             await update.message.reply_text("Error display menu. Try later.")
+
+# НАЧАЛО *
+async def start(update: Update, context: CallbackContext):
+    """Обрабатывает команду /start."""
+    user_id = update.effective_user.id
+
+    # Логирование команды /НАЧАЛО
+    logger.info(f"  start {user_id} - НАЧАЛО =================================================================")
+
+    try:
+        # Получение данных о пользователе из базы данных
+        cursor.execute(
+            """
+            SELECT user_id
+            FROM users 
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        )
+        user_data = cursor.fetchone()
+        await context.bot.send_message(chat_id=user_id, text=f"привет {user_id}")
+
+        # Если пользователь не найден, запрашиваем имя
+        if not user_data:
+            await update.effective_message.reply_text("Пожалуйста, введите ваше имя:")
+            context.user_data['waiting_for_name'] = True  # Устанавливаем состояние ожидания имени
+            return WAIT_FOR_NAME
+        else:
+            # Проверяем, есть ли активный курс
+            cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
+            active_course = cursor.fetchone()[0]
+
+            # Если курсы не активированы, запрашиваем кодовое слово
+            if not active_course:
+                await update.effective_message.reply_text(
+                    "Для начала введите кодовое слово вашего курса:"
+                )
+                context.user_data['waiting_for_code'] = True  # Устанавливаем состояние ожидания кодового слова
+                return WAIT_FOR_CODE
+            else:
+                # Если курсы активированы, показываем главное меню
+                await show_main_menu(update, context)
+                return ACTIVE  # Переходим в состояние ACTIVE
+    except Exception as e:
+        logger.error(f"Ошибка в функции НАЧАЛО start: {e}")
+        await update.effective_message.reply_text(
+            "Произошла ошибка. Попробуйте позже."
+        )
+        return ConversationHandler.END
 
 async def course_completion_actions(update: Update, context: CallbackContext):
     """Actions to perform upon course completion."""
@@ -506,54 +551,7 @@ async def get_homework_status_text(user_id, course_id):
     else:
         return "проверки домашек нет"
 
-# НАЧАЛО *
-async def start(update: Update, context: CallbackContext):
-    """Обрабатывает команду /start."""
-    user_id = update.effective_user.id
 
-    # Логирование команды /НАЧАЛО
-    logger.info(f"  start {user_id} - НАЧАЛО =================================================================")
-
-    try:
-        # Получение данных о пользователе из базы данных
-        cursor.execute(
-            """
-            SELECT user_id
-            FROM users 
-            WHERE user_id = ?
-            """,
-            (user_id,),
-        )
-        user_data = cursor.fetchone()
-        await context.bot.send_message(chat_id=user_id, text=f"привет {user_id}")
-
-        # Если пользователь не найден, запрашиваем имя
-        if not user_data:
-            await update.effective_message.reply_text("Пожалуйста, введите ваше имя:")
-            context.user_data['waiting_for_name'] = True  # Устанавливаем состояние ожидания имени
-            return WAIT_FOR_NAME
-        else:
-            # Проверяем, есть ли активный курс
-            cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
-            active_course = cursor.fetchone()[0]
-
-            # Если курсы не активированы, запрашиваем кодовое слово
-            if not active_course:
-                await update.effective_message.reply_text(
-                    "Для начала введите кодовое слово вашего курса:"
-                )
-                context.user_data['waiting_for_code'] = True  # Устанавливаем состояние ожидания кодового слова
-                return WAIT_FOR_CODE
-            else:
-                # Если курсы активированы, показываем главное меню
-                await show_main_menu(update, context)
-                return ACTIVE  # Переходим в состояние ACTIVE
-    except Exception as e:
-        logger.error(f"Ошибка в функции НАЧАЛО start: {e}")
-        await update.effective_message.reply_text(
-            "Произошла ошибка. Попробуйте позже."
-        )
-        return ConversationHandler.END
 
 # проверка активации курсов *
 async def activate_course(update: Update, context: CallbackContext, user_id, user_code):
@@ -699,10 +697,10 @@ async def update_next_lesson_time(user_id, course_id):
     """Обновляет время следующего урока для пользователя."""
     try:
         # Получаем текущее время
-        now = datetime.datetime.now()
+        now = datetime.now()
 
         # Вычисляем время следующего урока
-        next_lesson_time = now + datetime.timedelta(hours=DEFAULT_LESSON_DELAY_HOURS)
+        next_lesson_time = now + timedelta(hours=DEFAULT_LESSON_DELAY_HOURS)
         next_lesson_time_str = next_lesson_time.strftime('%Y-%m-%d %H:%M:%S')
 
         # Обновляем время в базе данных
@@ -760,14 +758,16 @@ async def handle_homework_submission(update: Update, context: CallbackContext):
         return
 
     active_course_id_full = active_course_data[0]
+    logger.info(f" handle_homework_submission домашка пошла админам в группу  {active_course_id_full }")
     cursor.execute('''
         SELECT progress
         FROM user_courses
         WHERE user_id = ? AND course_id = ?
     ''', (user_id, active_course_id_full))
     progress_data = cursor.fetchone()
-
+    logger.info(f" progress_data из БД progress {progress_data}")
     if not progress_data:
+        logger.warning(f" ПРОГРЕСС НЕ НАЙДЕН! КУДА ДЕЛСЯ? ")
         await update.message.reply_text("Не найден прогресс курса.")
         return
 
@@ -797,17 +797,18 @@ async def calculate_time_to_next_lesson(user_id, active_course_id_full):
     last_submission_data = cursor.fetchone()
 
     if not last_submission_data:
-        # Если еще не было уроков, то следующий урок через DEFAULT_LESSON_INTERVAL
-        next_lesson_time = datetime.datetime.now() + datetime.timedelta(hours=DEFAULT_LESSON_INTERVAL)
-        return next_lesson_time - datetime.datetime.now()
+        # Если ещё не было уроков, то следующий урок через DEFAULT_LESSON_INTERVAL
+        next_lesson_time = datetime.now() + timedelta(hours=DEFAULT_LESSON_INTERVAL)
+        return next_lesson_time - datetime.now()
 
-    last_submission_time = datetime.datetime.strptime(last_submission_data[0], '%Y-%m-%d %H:%M:%S')
+    # Преобразуем время последнего урока из базы данных
+    last_submission_time = datetime.strptime(last_submission_data[0], '%Y-%m-%d %H:%M:%S')
 
     # Рассчитываем время следующего урока
-    next_lesson_time = last_submission_time + datetime.timedelta(hours=DEFAULT_LESSON_INTERVAL)
+    next_lesson_time = last_submission_time + timedelta(hours=DEFAULT_LESSON_INTERVAL)
 
     # Возвращаем, сколько времени осталось до следующего урока
-    return next_lesson_time - datetime.datetime.now()
+    return next_lesson_time - datetime.now()
 
 # Подтверждает домашнее задание и увеличивает прогресс пользователя *
 async def approve_homework(update: Update, context: CallbackContext):
@@ -853,12 +854,21 @@ async def approve_homework(update: Update, context: CallbackContext):
 
     # Schedule next lesson based on DEFAULT_LESSON_INTERVAL from lesson_sent_time
     if not lesson_sent_time:
-        # If no previous sent time is logged, use now as fallback
-        lesson_sent_time = datetime.now()
+        # Если нет предыдущего времени отправки, используем текущее время
+        lesson_sent_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Преобразуем в строку
 
-    schedule_time = datetime.strptime(lesson_sent_time, '%Y-%m-%d %H:%M:%S') + timedelta(hours=DEFAULT_LESSON_INTERVAL)
+    # Преобразуем строку в объект datetime
+    schedule_datetime = datetime.strptime(lesson_sent_time, '%Y-%m-%d %H:%M:%S')
 
-    add_user_to_scheduler(user_id=user_id, time=schedule_time.time(), context=context)
+    # Добавляем интервал к времени
+    schedule_datetime += timedelta(hours=DEFAULT_LESSON_INTERVAL)
+
+    # Получаем время (time) из datetime
+    schedule_time = schedule_datetime.time()
+    logger.info(f" approve_homework {schedule_time=} ")
+    # Передаем время в функцию
+    add_user_to_scheduler(user_id=user_id, time2=schedule_time, context=context)
+
 
     await query.message.reply_text(
         f"Домашнее задание по уроку {lesson} подтверждено. Следующий урок будет отправлен в {schedule_time}.")
@@ -1193,10 +1203,29 @@ async def handle_check_payment(update: Update, context: CallbackContext, tariff_
     query = update.callback_query
     user_id = update.effective_user.id
 
+    logger.info(f"handle_check_payment: tariff_id={tariff_id}, user_id={user_id}")
+
+    if not tariff_id:
+        logger.error("handle_check_payment: tariff_id is empty.")
+        await query.message.reply_text("Произошла ошибка: tariff_id не может быть пустым.")
+        return
+
+    logger.info(f"handle_check_payment: Извлеченный tariff_id: {tariff_id}")
+
     try:
         # Load tariffs from file
-        with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
-            tariffs = json.load(f)
+        try:
+            with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
+                tariffs = json.load(f)
+            logger.info(f"handle_check_payment: Tariffs data loaded: {len(tariffs)}")
+        except FileNotFoundError:
+            logger.error(f"Tariff file not found: {TARIFFS_FILE}")
+            await query.message.reply_text("Tariff file not found. Please try again later.")
+            return
+        except json.JSONDecodeError:
+            logger.error(f"Error decoding JSON from file: {TARIFFS_FILE}")
+            await query.message.reply_text("Error decoding tariff data. Please try again later.")
+            return
 
         # Find selected tariff
         selected_tariff = next((tariff for tariff in tariffs if tariff['id'] == tariff_id), None)
@@ -1204,23 +1233,29 @@ async def handle_check_payment(update: Update, context: CallbackContext, tariff_
         if selected_tariff:
             logger.info(f"Handling check payment for tariff: {selected_tariff}")
 
-            # Отправляем уведомление администратору
-            message = f"Пользователь {user_id} запросил проверку оплаты тарифа {selected_tariff['title']}"
-            keyboard = [
-                [InlineKeyboardButton("Одобрить", callback_data=f"approve_payment_{user_id}_{tariff_id}")],
-                [InlineKeyboardButton("Отклонить", callback_data=f"decline_payment_{user_id}_{tariff_id}")],
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            for admin_id in ADMIN_IDS:
-                await context.bot.send_message(chat_id=admin_id, text=message, reply_markup=reply_markup)
-            await query.message.reply_text("Ваш запрос на проверку оплаты отправлен администратору.")
+            # Send notification to admins
+            message = (
+                f"Пользователь {user_id} запросил проверку оплаты тарифа {selected_tariff['title']}.\n"
+                f"Необходимо проверить оплату и активировать тариф для пользователя."
+            )
+
+            # Send notification to all admin IDs
+            for admin_id in ADMIN_IDS:  # Ensure ADMIN_IDS is a list of strings
+                try:
+                    await context.bot.send_message(chat_id=admin_id, text=message)
+                    logger.info(f"Sent payment verification request to admin {admin_id}")
+                except TelegramError as e:
+                    logger.error(f"Failed to send message to admin {admin_id}: {e}")
+
+            await query.message.reply_text("Ваш запрос на проверку оплаты отправлен администратору. Ожидайте подтверждения.")
 
         else:
             logger.warning(f"Tariff with id {tariff_id} not found.")
-            await query.message.reply_text("Выбранный тариф не найден.")
+            await query.message.reply_text("Tariff not found. Please select again.")
+
     except Exception as e:
-        logger.error(f"Error handling check payment: {e}")
-        await query.message.reply_text("Произошла ошибка при проверке оплаты. Попробуйте позже.")
+        logger.exception(f"Error handling check payment: {e}")
+        await query.message.reply_text("Error processing payment verification. Please try again later.")
 
 
 # галерея
@@ -1377,7 +1412,7 @@ async def show_tariffs(update: Update, context: CallbackContext):
         try:
             with open(TARIFFS_FILE, 'r', encoding='utf-8') as f:
                 tariffs = json.load(f)
-                logger.info(f"show_tariffs -  {tariffs}-------------------- 222")
+                logger.info(f"show_tariffs  len(tariffs)={len(tariffs)}-------------------- 222")
         except FileNotFoundError:
             logger.error(f"File not found: {TARIFFS_FILE}")
             await context.bot.send_message(chat_id=query.message.chat_id,
@@ -1749,73 +1784,6 @@ async def handle_go_to_payment(update: Update, context: CallbackContext, tariff_
         logger.error(f"Error handling go to payment: {e}")
         await query.message.reply_text("Произошла ошибка при переходе к оплате. Попробуйте позже.")
 
-
-
-# Обрабатывает нажатия на кнопки все
-button_handlers = {
-    'get_current_lesson': get_current_lesson,
-    'gallery': show_gallery,
-    'gallery_next': lambda update, context: get_random_homework(update, context),
-    'menu_back': show_main_menu,
-    'support': show_support,
-    'tariffs': show_tariffs,
-    'course_settings': show_course_settings,
-    'statistics': show_statistics,
-    'preliminary_tasks': send_preliminary_material,
-}
-
-async def button_handler(update: Update, context: CallbackContext):
-    """Handles button presses."""
-    query = update.callback_query
-    data = query.data
-    logger.info(f"{update.effective_user.id} - button_handler")
-    await query.answer()
-
-    try:
-        if data.startswith('check_payment_'):
-            # Handle "I Paid" button
-            tariff_id = data.split('_')[2]
-            await handle_check_payment(update, context, tariff_id)
-            return
-
-        elif data.startswith('approve_payment_'):
-            # Handle "Approve Payment" button
-            user_id, tariff_id = data.split('_')[2], data.split('_')[3]
-            await handle_approve_payment(update, context, user_id, tariff_id)
-            return
-        elif data.startswith('decline_payment_'):
-            # Handle "Decline Payment" button
-            user_id, tariff_id = data.split('_')[2], data.split('_')[3]
-            await handle_decline_payment(update, context, user_id, tariff_id)
-            return
-
-        # Check for tariff selection first
-        if data.startswith('tariff_'):
-            logger.info(f" 777 данные {data} ==================")
-            # Извлекаем tariff_id, разделяя строку только один раз
-            tariff_id = data.split('_', 1)[1]
-            logger.info(f" handler для handle_tariff_selection {tariff_id}")
-            await handle_tariff_selection(update, context, tariff_id)
-        elif data.startswith('buy_tariff_'):
-            # Handle "Buy" button
-            tariff_id = data.split('_', 2)[2]
-            logger.info(f" handler для handle_buy_tariff {tariff_id}")
-            await handle_buy_tariff(update, context, tariff_id)
-        elif data.startswith('go_to_payment_'):
-            # Handle "Go to Payment" button
-            tariff_id = data.split('_', 2)[2]
-            logger.info(f" handler для handle_go_to_payment {tariff_id}")
-            await handle_go_to_payment(update, context, tariff_id)
-        elif data in button_handlers:
-            handler = button_handlers[data]
-            await handler(update, context)
-        else:
-            await query.message.reply_text("Unknown command")
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await query.message.reply_text("Произошла ошибка. Попробуйте позже.")
-
-
 async def handle_buy_tariff(update: Update, context: CallbackContext, tariff_id: str):
     """Обрабатывает нажатие на кнопку 'Купить'."""
     query = update.callback_query
@@ -1895,6 +1863,65 @@ async def handle_buy_tariff(update: Update, context: CallbackContext, tariff_id:
         logger.exception(f"handle_buy_tariff: Непредвиденная ошибка при обработке покупки: {e}")
         await query.message.reply_text("Произошла непредвиденная ошибка при обработке покупки. Попробуйте позже.")
 
+# Обрабатывает нажатия на кнопки все
+button_handlers = {
+    'get_current_lesson': get_current_lesson,
+    'gallery': show_gallery,
+    'gallery_next': lambda update, context: get_random_homework(update, context),
+    'menu_back': show_main_menu,
+    'support': show_support,
+    'tariffs': show_tariffs,
+    'course_settings': show_course_settings,
+    'statistics': show_statistics,
+    'preliminary_tasks': send_preliminary_material,
+}
+
+async def button_handler(update: Update, context: CallbackContext):
+    """Handles button presses."""
+    query = update.callback_query
+    data = query.data
+    logger.info(f"{update.effective_user.id} - button_handler")
+    await query.answer()
+
+    try:
+        # Check for tariff selection first
+        if data.startswith('tariff_'):
+            logger.info(f" 777 данные {data} ==================")
+            # Извлекаем tariff_id, разделяя строку только один раз
+            tariff_id = data.split('_', 1)[1]
+            logger.info(f" handler для handle_tariff_selection {tariff_id}")
+            await handle_tariff_selection(update, context, tariff_id)
+        elif data.startswith('buy_tariff_'):
+            # Handle "Buy" button
+            tariff_id = data.split('_', 2)[2]
+            logger.info(f" handler для handle_buy_tariff {tariff_id}")
+            await handle_buy_tariff(update, context, tariff_id)
+        elif data.startswith('go_to_payment_'):
+            # Handle "Go to Payment" button
+            tariff_id = data.split('_', 2)[2]
+            logger.info(f" handler для handle_go_to_payment {tariff_id}")
+            await handle_go_to_payment(update, context, tariff_id)
+
+        elif data.startswith('check_payment_'):
+            # Handle "I Paid" button
+            try:
+                tariff_id = data.split('_', 2)[1]  # Извлекаем tariff_id правильно
+                logger.info(f" handler для handle_check_payment {tariff_id}")
+            except IndexError:
+                logger.error(f"Не удалось извлечь tariff_id из data: {data} ====== 8888")
+                await query.message.reply_text("Произошла ошибка. Попробуйте позже.")
+                return
+            await handle_check_payment(update, context, tariff_id)
+
+
+        elif data in button_handlers:
+            handler = button_handlers[data]
+            await handler(update, context)
+        else:
+            await query.message.reply_text("Unknown command")
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        await query.message.reply_text("Произошла ошибка. Попробуйте позже.")
 
 # выбор товара в магазине *
 async def handle_tariff_selection(update: Update, context: CallbackContext, tariff_id: str):
@@ -2156,23 +2183,25 @@ async def reminders(update: Update, context: CallbackContext):
 async def set_morning(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     try:
-        time = context.args[0]
-        if not re.match(r"^\d{2}:\d{2}$", time):
+        time1 = context.args[0]
+        if not re.match(r"^\d{2}:\d{2}$", time1):
             raise ValueError
-        cursor.execute('UPDATE user_settings SET morning_notification = ? WHERE user_id = ?', (time, user_id))
+        cursor.execute('UPDATE user_settings SET morning_notification = ? WHERE user_id = ?', (time1, user_id))
         conn.commit()
-        await update.message.reply_text(f"🌅 Утреннее напоминание установлено на {time}.")
+        await update.message.reply_text(f"🌅 Утреннее напоминание установлено на {time1}.")
     except (IndexError, ValueError):
         await update.message.reply_text("Неверный формат времени. Используйте формат HH:MM.")
 
 async def disable_reminders(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
+    logger.info(f"disable_reminders  ")
     cursor.execute('UPDATE user_settings SET morning_notification = NULL, evening_notification = NULL WHERE user_id = ?', (user_id,))
     conn.commit()
     await update.message.reply_text("🔕 Все напоминания отключены.")
 
 async def send_reminders(context: CallbackContext):
-    now = datetime.datetime.now().strftime("%H:%M")
+    now = datetime.now().strftime("%H:%M")
+    logger.info(f"send_reminders {now} ")
     cursor.execute('SELECT user_id, morning_notification, evening_notification FROM user_settings')
     for user_id, morning, evening in cursor.fetchall():
         if morning and now == morning:
@@ -2225,18 +2254,19 @@ async def send_lesson_by_timer(user_id: int, context: CallbackContext):
     await show_lesson(update, context)
 
 # тута инициативно шлём уроки *
-def add_user_to_scheduler(user_id: int, time: datetime, context: CallbackContext):
-        """ Add user to send_lesson_by_timer with specific time"""
-        # Schedule the daily message
-        scheduler.add_job(
-            send_lesson_by_timer,
-            trigger="cron",
-            hour=time.hour,
-            minute=time.minute,
-            start_date=datetime.datetime.now(),
-            kwargs={"user_id": user_id, "context": context},
-            id=f"lesson_{user_id}",  # Unique ID for the job
-        )
+
+def add_user_to_scheduler(user_id: int, time2: datetime, context: CallbackContext):
+    """Add user to send_lesson_by_timer with specific time."""
+    # Schedule the daily message
+    scheduler.add_job(
+        send_lesson_by_timer,
+        trigger="cron",
+        hour=time2.hour,
+        minute=time2.minute,
+        start_date=datetime.now(),  # Начало выполнения задачи
+        kwargs={"user_id": user_id, "context": context},
+        id=f"lesson_{user_id}",  # Уникальный ID для задачи
+    )
 
 async def stats(update: Update, context: CallbackContext):
     # Активные пользователи за последние 3 дня
@@ -2362,7 +2392,7 @@ def check_last_lesson(active_course_id):
     count = 0
     try:
         for path in os.listdir(dir_path):
-            # check if current path is file
+            # check if current path
             if os.path.isfile(os.path.join(dir_path, path)):
                 count += 1
     except Exception as e:
@@ -2764,7 +2794,7 @@ async def process_selfie(update: Update, context: CallbackContext):
     await update.message.reply_text("Теперь отправьте описание, почему вы хотите получить эту скидку:")
     return WAIT_FOR_DESCRIPTION
 
-# Обрабатывает описание для получения скидки."*
+# Обрабатывает описание для получения скидки.*
 async def process_description(update: Update, context: CallbackContext):
     """Обрабатывает описание для получения скидки."""
     user_id = update.effective_user.id
@@ -2789,7 +2819,7 @@ async def process_description(update: Update, context: CallbackContext):
     await update.message.reply_text("Ваш запрос отправлен на рассмотрение администраторам.")
     return ConversationHandler.END
 
-# Обрабатывает загруженный чек." *
+# Обрабатывает загруженный чек *
 async def process_check(update: Update, context: CallbackContext):
     """Обрабатывает загруженный чек."""
     user_id = update.effective_user.id
@@ -2888,8 +2918,8 @@ async def get_next_lesson_time(user_id):
 
             if submission_result and submission_result[0]:
                 submission_time_str = submission_result[0]
-                submission_time = datetime.datetime.strptime(submission_time_str, '%Y-%m-%d %H:%M:%S')
-                next_lesson_time = submission_time + datetime.timedelta(hours=DEFAULT_LESSON_DELAY_HOURS)
+                submission_time = datetime.strptime(submission_time_str, '%Y-%m-%d %H:%M:%S')
+                next_lesson_time = submission_time + timedelta(hours=DEFAULT_LESSON_DELAY_HOURS)
                 next_lesson_time_str = next_lesson_time.strftime('%Y-%m-%d %H:%M:%S')
 
                 # Обновляем время в базе данных
