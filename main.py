@@ -88,7 +88,7 @@ persistence = PicklePersistence(filepath="bot_data.pkl")
 DELAY_PATTERN = re.compile(r"_(\d+)([mh])$")
 
 # Интервал между уроками по умолчанию (в часах)
-DEFAULT_LESSON_INTERVAL = 0.3 # интервал уроков 72 часа
+DEFAULT_LESSON_INTERVAL = 0.1 # интервал уроков 72 часа а не 6 минут!!!
 
 DEFAULT_LESSON_DELAY_HOURS = 3
 
@@ -538,18 +538,40 @@ def generate_lesson_keyboard(lessons, items_per_page=10):
 
 # домашка ???
 async def get_homework_status_text(user_id, course_id):
+    """Возвращает текст статуса проверки домашнего задания."""
+    # Проверяем статус домашнего задания
     cursor.execute('''
-        SELECT hw_id, lesson, status 
-        FROM homeworks 
-        WHERE user_id = ? AND course_id = ? AND status = 'pending'
+        SELECT hw_id, lesson, status
+        FROM homeworks
+        WHERE user_id = ? AND course_id = ?
+        ORDER BY lesson DESC LIMIT 1
     ''', (user_id, course_id))
-    pending_hw = cursor.fetchone()
-    logger.info(f"  get_homework_status_text  {user_id=} {course_id=}  pending_hw={pending_hw}- get_homework_status_text")
-    if pending_hw:
-        hw_id, lesson, status = pending_hw
-        return f"есть домашка по {lesson} уроку"
+    homework_data = cursor.fetchone()
+
+    if not homework_data:
+        # Если домашки еще не отправлялись
+        cursor.execute('''
+            SELECT progress
+            FROM user_courses
+            WHERE user_id = ? AND course_id = ?
+        ''', (user_id, course_id))
+        progress_data = cursor.fetchone()
+        if progress_data:
+            lesson = progress_data[0]
+            return f"Жду домашку к {lesson} уроку"
+        else:
+            return "Информация о прогрессе недоступна"
+
+    hw_id, lesson, status = homework_data
+
+    # Формируем текст в зависимости от статуса
+    if status == 'pending':
+        return f"Домашка к {lesson} уроку на самопроверке"
+    elif status == 'approved':
+        return f"Домашка к {lesson} уроку принята"
     else:
-        return "проверки домашек нет"
+        return "Статус домашки неизвестен странен и загадочен"
+
 
 
 
@@ -809,69 +831,6 @@ async def calculate_time_to_next_lesson(user_id, active_course_id_full):
 
     # Возвращаем, сколько времени осталось до следующего урока
     return next_lesson_time - datetime.now()
-
-# Подтверждает домашнее задание и увеличивает прогресс пользователя *
-async def approve_homework(update: Update, context: CallbackContext):
-    """Approves homework and schedules the next lesson."""
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data.split('_')
-    hw_id = int(data[2])
-
-    # Get homework details
-    cursor.execute('''
-        SELECT user_id, course_id, lesson, lesson_sent_time
-        FROM homeworks
-        WHERE hw_id = ?
-    ''', (hw_id,))
-    result = cursor.fetchone()
-
-    if result is None:
-        await query.message.reply_text("Cannot find homework")
-        return
-
-    user_id, course_id, lesson, lesson_sent_time = result
-    logger.info(f"Confirm DCh [User: {user_id}, Course: {course_id}, Lesson: {lesson}]")
-
-    # Log final_approval_time
-    final_approval_time = datetime.now()
-    cursor.execute('''
-        UPDATE homeworks
-        SET final_approval_time = ?
-        WHERE hw_id = ?
-    ''', (final_approval_time, hw_id))
-
-    # Update progress to next lesson
-    next_lesson = lesson + 1
-    cursor.execute('''
-        UPDATE user_courses
-        SET progress = ?
-        WHERE user_id = ? AND course_id = ?
-    ''', (next_lesson, user_id, course_id))
-
-    conn.commit()
-
-    # Schedule next lesson based on DEFAULT_LESSON_INTERVAL from lesson_sent_time
-    if not lesson_sent_time:
-        # Если нет предыдущего времени отправки, используем текущее время
-        lesson_sent_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Преобразуем в строку
-
-    # Преобразуем строку в объект datetime
-    schedule_datetime = datetime.strptime(lesson_sent_time, '%Y-%m-%d %H:%M:%S')
-
-    # Добавляем интервал к времени
-    schedule_datetime += timedelta(hours=DEFAULT_LESSON_INTERVAL)
-
-    # Получаем время (time) из datetime
-    schedule_time = schedule_datetime.time()
-    logger.info(f" approve_homework {schedule_time=} ")
-    # Передаем время в функцию
-    add_user_to_scheduler(user_id=user_id, time2=schedule_time, context=context)
-
-
-    await query.message.reply_text(
-        f"Домашнее задание по уроку {lesson} подтверждено. Следующий урок будет отправлен в {schedule_time}.")
 
 async def save_admin_comment(update: Update, context: CallbackContext):
     """
@@ -1299,7 +1258,55 @@ async def set_tariff(update: Update, context: CallbackContext):
 
 async def show_support(update: Update, context: CallbackContext):
     """Отображает информацию о поддержке."""
+    logger.info(f" show_support  ")
     await update.message.reply_text("Здесь будет информация о поддержке.")
+
+# самопроверка на базовом тарифчике пт 14 марта 17:15
+async def self_approve_homework(update: Update, context: CallbackContext):
+    """Обрабатывает нажатие кнопки самопроверки."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data.split('_')
+    hw_id = int(data[1])
+
+    # Обновляем статус домашнего задания на "approved"
+    cursor.execute('''
+        UPDATE homeworks
+        SET status = 'approved'
+        WHERE hw_id = ?
+    ''', (hw_id,))
+    conn.commit()
+
+    # Редактируем сообщение, чтобы убрать кнопку
+    try:
+        await query.edit_message_text(text="Домашнее задание подтверждено вами.")
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+        await query.message.reply_text(f"Домашнее задание подтверждено, но шота как то не того.")
+
+
+
+# проверка админом на базовом тарифчике пт 14 марта 17:15
+async def approve_homework(update: Update, context: CallbackContext):
+    """Approves homework."""
+    logger.info(f" approve_homework  333 777")
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data.split('_')
+    hw_id = int(data[1])
+
+    # Обновляем статус домашнего задания на "approved"
+    cursor.execute('''
+        UPDATE homeworks
+        SET status = 'approved'
+        WHERE hw_id = ?
+    ''', (hw_id,))
+    conn.commit()
+
+    await query.message.reply_text(f"Домашнее задание подтверждено.")
+
 
 async def handle_approve_payment(update: Update, context: CallbackContext, user_id: str, tariff_id: str):
     """Handles the "Approve Payment" button."""
@@ -2059,15 +2066,102 @@ async def handle_name(update: Update, context: CallbackContext):
     await update.message.reply_text(f"Отлично, {full_name}! Теперь введите кодовое слово для активации курса.")
     return WAIT_FOR_CODE
 
-# Обрабатывает отправленные пользователем документы *
+# прислали домашку и заверте... пт 14 марта 17:15
 async def handle_document(update: Update, context: CallbackContext):
-    """Обрабатывает отправленные пользователем документы."""
-    if update.message.document.mime_type.startswith('image/'):
-        await handle_homework_submission(update, context)
-    else:
+    """Handles document messages (homework submissions)."""
+    user_id = update.effective_user.id
+    logger.info(f" handle_document  ")
+
+    # Проверяем, что это изображение
+    if not update.message.document.mime_type.startswith('image/'):
         await update.message.reply_text("⚠️ Отправьте, пожалуйста, картинку или фотографию.")
+        return
 
+    # Получаем активный курс и прогресс пользователя
+    cursor.execute('SELECT active_course_id FROM users WHERE user_id = ?', (user_id,))
+    active_course_data = cursor.fetchone()
 
+    if not active_course_data or not active_course_data[0]:
+        await update.message.reply_text("Пожалуйста, активируйте курс.")
+        return
+
+    active_course_id_full = active_course_data[0]
+    cursor.execute('''
+        SELECT progress, tariff
+        FROM user_courses
+        WHERE user_id = ? AND course_id = ?
+    ''', (user_id, active_course_id_full))
+    progress_data = cursor.fetchone()
+
+    if not progress_data:
+        await update.message.reply_text("Не найден прогресс курса.")
+        return
+
+    lesson, tariff = progress_data
+
+    try:
+        # Получаем информацию о файле
+        photo_file = await update.message.document.get_file()
+        file_path = f"homeworks/{user_id}_{photo_file.file_unique_id}.jpg"
+        await photo_file.download_to_drive(file_path)
+
+        # Сохраняем информацию о домашнем задании в базе данных
+        cursor.execute('''
+            INSERT INTO homeworks (user_id, course_id, lesson, file_path, status)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (user_id, active_course_id_full, lesson, file_path, 'pending'))
+        conn.commit()
+
+        # Получаем hw_id только что добавленной записи
+        cursor.execute('''
+            SELECT hw_id FROM homeworks 
+            WHERE user_id = ? AND course_id = ? AND lesson = ?
+            ORDER BY hw_id DESC LIMIT 1
+        ''', (user_id, active_course_id_full, lesson))
+        hw_id_data = cursor.fetchone()
+        hw_id = hw_id_data[0] if hw_id_data else None
+
+        if hw_id is None:
+            logger.error(f"Не удалось получить hw_id для user_id={user_id}, course_id={active_course_id_full}, lesson={lesson}")
+            await update.message.reply_text("Произошла ошибка при обработке домашнего задания. Попробуйте позже.")
+            return
+
+        # Если тариф с самопроверкой
+        if tariff == 'self_check':
+            # Отправка кнопки для самопроверки пользователю
+            keyboard = [
+                [InlineKeyboardButton("✅ Принять домашнее задание", callback_data=f"self_approve_{hw_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                f"Домашнее задание по уроку {lesson} отправлено. Вы можете самостоятельно подтвердить выполнение.",
+                reply_markup=reply_markup
+            )
+        else:
+            # Отправка домашнего задания админу для проверки
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Принять", callback_data=f"approve_homework_{hw_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"decline_homework_{hw_id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            admin_message = f"Пользователь {user_id} отправил домашнее задание по курсу {active_course_id_full}, урок {lesson}."
+            try:
+                with open(file_path, 'rb') as photo:
+                    await context.bot.send_photo(chat_id=ADMIN_GROUP_ID, photo=photo, caption=admin_message,
+                                                 reply_markup=reply_markup)
+                    logger.info(f"Sent homework to admin group for user {user_id}, lesson {lesson}")
+            except Exception as e:
+                logger.error(f"Ошибка при отправке сообщения админу: {e}")
+                await update.message.reply_text("Произошла ошибка при отправке сообщения админу. Попробуйте позже.")
+                return
+
+        await update.message.reply_text("Домашнее задание отправлено на проверку.")
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке домашнего задания: {e}")
+        await update.message.reply_text("Произошла ошибка при обработке домашнего задания. Попробуйте позже.")
 
 # Инициализация БД
 conn = sqlite3.connect('bot_db.sqlite', check_same_thread=False)
@@ -3047,7 +3141,6 @@ def setup_user_commands(application):
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", show_main_menu))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_homework_submission))
     application.add_handler(CallbackQueryHandler(tariff_callback, pattern='^tariff_'))
 
 
@@ -3062,8 +3155,11 @@ def main():
             ACTIVE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message),
                 CallbackQueryHandler(button_handler),
-                MessageHandler(filters.PHOTO, handle_homework_submission),
                 MessageHandler(filters.Document.IMAGE, handle_document),
+
+                CallbackQueryHandler(self_approve_homework, pattern=r'^self_approve_\d+$'),
+                CallbackQueryHandler(approve_homework, pattern=r'^approve_homework_\d+_\d+$'),
+
             ],
             WAIT_FOR_SUPPORT_TEXT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND | filters.PHOTO, get_support_text)
