@@ -193,7 +193,6 @@ async def handle_user_info(update: Update, context: CallbackContext):
         return WAIT_FOR_NAME
 
 # проверка оплаты через кодовые слова *
-# проверка оплаты через кодовые слова *
 async def handle_code_words(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     user_code = update.message.text.strip()
@@ -662,9 +661,6 @@ async def get_homework_status_text(user_id, course_id):
     else:
         return "Статус домашки неизвестен странен и загадочен"
 
-
-
-
 # проверка активации курсов *
 async def activate_course(update: Update, context: CallbackContext, user_id, user_code):
     """Активирует курс для пользователя."""
@@ -784,25 +780,6 @@ async def send_lesson(update: Update, context: CallbackContext, course_id: str):
     except Exception as e:
         logger.error(f"Ошибка при отправке урока: {e}")
         await context.bot.send_message(chat_id=user.id, text="Произошла ошибка при отправке урока. Попробуйте позже.")
-
-# читать текст урока из файла *
-def get_lesson_text(user_id, lesson_number, course_id):
-    """Получает текст урока из файла."""
-    logger.info(f"  get_lesson_text {user_id} - lesson_number {lesson_number}")
-    try:
-        # Убедимся, что lesson_number - это целое число
-        lesson_number = int(lesson_number)
-
-        filepath = f'courses/{course_id}/lesson{lesson_number}.txt'
-        with open(filepath, 'r', encoding='utf-8') as file:
-            return file.read()
-
-    except FileNotFoundError:
-        logger.error(f" 88888888 Файл урока не найден: {filepath}")
-        return None
-    except Exception as e:
-        logger.error(f"Ошибка при чтении файла урока: {e}")
-        return None
 
 # вычисляем время следующего урока *
 async def update_next_lesson_time(user_id, course_id):
@@ -1307,10 +1284,7 @@ async def handle_check_payment(update: Update, context: CallbackContext, tariff_
         await query.message.reply_text("Error processing payment verification. Please try again later.")
 
 
-# галерея
-async def show_gallery(update: Update, context: CallbackContext):
-    logger.info(f"show_gallery -------------<")
-    await get_random_homework(update, context)
+
 
 # Устанавливает выбранный тариф для пользователя
 async def set_tariff(update: Update, context: CallbackContext):
@@ -1375,9 +1349,6 @@ async def self_approve_homework(update: Update, context: CallbackContext):
         logger.error(f"Ошибка при редактировании сообщения: {e}")
         await query.message.reply_text(f"Домашнее задание подтверждено, но не удалось изменить сообщение.")
 
-
-
-
 # проверка админом на базовом тарифчике пт 14 марта 17:15
 async def approve_homework(update: Update, context: CallbackContext):
     """Approves homework."""
@@ -1397,7 +1368,6 @@ async def approve_homework(update: Update, context: CallbackContext):
     conn.commit()
 
     await query.message.reply_text(f"Домашнее задание подтверждено.")
-
 
 async def handle_approve_payment(update: Update, context: CallbackContext, user_id: str, tariff_id: str):
     """Handles the "Approve Payment" button."""
@@ -1458,7 +1428,6 @@ async def handle_decline_payment(update: Update, context: CallbackContext, user_
     except Exception as e:
         logger.error(f"Error handling decline payment: {e}")
         await query.message.reply_text("Произошла ошибка при отклонении оплаты. Попробуйте позже.")
-
 
 # Отображает настройки курса *
 async def show_course_settings(update: Update, context: CallbackContext):
@@ -2754,8 +2723,6 @@ def load_tariffs():
         logger.error(f"Ошибка декодирования JSON в файле {TARIFFS_FILE}.")
         return []
 
-
-
 # Обрабатывает выбор тарифа. *
 async def tariff_callback(update: Update, context: CallbackContext):
     """Обрабатывает выбор тарифа."""
@@ -3047,7 +3014,7 @@ async def process_gift_user_id(update: Update, context: CallbackContext):
     await update.message.reply_text(text)
     return WAIT_FOR_CHECK
 
-# просим *
+# просим номерок *
 async def process_phone_number(update: Update, context: CallbackContext):
     contact = update.message.contact
     phone_number = contact.phone_number
@@ -3127,6 +3094,11 @@ async def get_gallery_count():
     cursor.execute('SELECT COUNT(*) FROM homeworks WHERE status = "approved"')
     logger.info(f"get_gallery_count -------------<")
     return cursor.fetchone()[0]
+
+# галерея
+async def show_gallery(update: Update, context: CallbackContext):
+    logger.info(f"show_gallery -------------<")
+    await get_random_homework(update, context)
 
 # галерейка
 async def get_random_homework(update: Update, context: CallbackContext):
