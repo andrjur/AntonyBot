@@ -1,0 +1,44 @@
+[
+  {
+    "course_id": "femininity_self_check",
+    "course_name": "Femininity",
+    "course_type": "main",
+    "tariff": "self_check",
+    "code_word": "роза"
+  },
+  {
+    "course_id": "femininity_admin_check",
+    "course_name": "Femininity",
+    "course_type": "main",
+    "tariff": "admin_check",
+    "code_word": "фиалка"
+  },
+  {
+    "course_id": "femininity_premium",
+    "course_name": "Femininity",
+    "course_type": "main",
+    "tariff": "premium",
+    "code_word": "лепесток"
+  },
+  {
+    "course_id": "autogenic_self_check",
+    "course_name": "Autogenic",
+    "course_type": "auxiliary",
+    "tariff": "self_check",
+    "code_word": "тыква"
+  },
+  {
+    "course_id": "autogenic_admin_check",
+    "course_name": "Autogenic",
+    "course_type": "auxiliary",
+    "tariff": "admin_check",
+    "code_word": "слива"
+  },
+  {
+    "course_id": "autogenic_premium",
+    "course_name": "Autogenic",
+    "course_type": "auxiliary",
+    "tariff": "premium",
+    "code_word": "молоко"
+  }
+]
