@@ -14,7 +14,7 @@ import re
 import asyncio
 from telegram.error import TelegramError
 import json
-
+import random
 
 class Course:
     def __init__(self, course_id, course_name, course_type, tariff, code_word):
@@ -60,6 +60,26 @@ def load_course_data(filename):
 
 COURSE_DATA = load_course_data(COURSE_DATA_FILE)
 
+
+# Функция для загрузки фраз из текстового файла
+def load_delay_messages(file_path="delay_messages.txt"):
+    """Загружает список фраз из текстового файла."""
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            messages = [line.strip() for line in file if line.strip()]
+        return messages
+    except FileNotFoundError:
+        logger.error(f"Файл с фразами не найден: {file_path}")
+        return ["Ещё материал идёт, домашнее задание – можно уже делать"]
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке фраз из файла: {e}")
+        return ["Ещё материал идёт, домашнее задание – можно уже делать"]
+
+# Загрузка фраз в начале программы
+DELAY_MESSAGES = load_delay_messages()
+
+
+
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
@@ -85,7 +105,9 @@ persistence = PicklePersistence(filepath="bot_data.pkl")
 
 
 # Регулярное выражение для извлечения времени задержки из имени файла
-DELAY_PATTERN = re.compile(r"_(\d+)([mh])$")
+# DELAY_PATTERN = re.compile(r"_(\d+)([mh])$") эта регулярка min не поддерживает
+# DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)$") расширение сраное забыли
+DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")
 
 # Интервал между уроками по умолчанию (в часах)
 DEFAULT_LESSON_INTERVAL = 0.1 # интервал уроков 72 часа а не 6 минут!!!
@@ -206,7 +228,7 @@ async def handle_code_words(update: Update, context: CallbackContext):
 async def get_current_lesson(update: Update, context: CallbackContext):
     """Отправляет все материалы текущего урока."""
     user_id = update.effective_user.id
-    logger.info(f" get_current_lesson {user_id} - Current state")
+    logger.info(f" 777 get_current_lesson {user_id} - Current state")
 
     try:
         # Получаем active_course_id из users
@@ -283,7 +305,17 @@ async def get_current_lesson(update: Update, context: CallbackContext):
             file_path = file_info['path']
             file_type = file_info['type']
             delay = file_info['delay']  # Получаем задержку
-            logger.info(f" {i} файл {file_path=} {file_type=}")
+            logger.info(f" {i} файл {file_path=} {file_type=} {delay=}")  # добавить в лог
+
+            # Задержка перед отправкой
+            if delay > 0:
+                logger.info(f"Ожидание {delay} секунд перед отправкой файла {file_path}")
+                if update.callback_query:
+                    await update.callback_query.message.reply_text("ещё материал идёт, домашнее задание – можно уже делать")
+                else:
+                    await update.message.reply_text("ещё материал идёт, домашнее задание – можно уже делать")
+                await asyncio.sleep(delay)
+
             try:
                 with open(file_path, 'rb') as file:
                     if file_type == 'photo':
@@ -294,24 +326,24 @@ async def get_current_lesson(update: Update, context: CallbackContext):
                         await context.bot.send_audio(chat_id=user_id, audio=file)
                     else:
                         await context.bot.send_document(chat_id=user_id, document=file)
-                        # Отправляем информацию о задержке
-                if delay > 0:
-                    delay_time = timedelta(seconds=delay)
-                    time_release = datetime.now() + delay_time
-
-                    delay_text = f"Материал станет доступен через {delay_time} ({time_release.strftime('%H:%M:%S')})"
-                    await context.bot.send_message(chat_id=user_id, text=delay_text)
 
             except FileNotFoundError:
                 logger.error(f"Media file not found: {file_path}")
-                await update.message.reply_text(f"Media file not found: {file_path}")
+                if update.callback_query:
+                    await update.callback_query.message.reply_text(f"Media file not found: {file_path}")
+                else:
+                    await update.message.reply_text(f"Media file not found: {file_path}")
             except Exception as e:
                 logger.error(f"Error sending media file: {e}")
-                await update.message.reply_text(f"Error sending media file. {e}")
+                if update.callback_query:
+                    await update.callback_query.message.reply_text(f"Error sending media file. {e}")
+                else:
+                    await update.message.reply_text(f"Error sending media file. {e}")
+
         if update.callback_query:
-            await update.callback_query.message.reply_text(f"послано { len(lesson_files)} файлов")
+            await update.callback_query.message.reply_text(f"послано {len(lesson_files)} файлов")
         else:
-            await update.message.reply_text(f"послано { len(lesson_files)} файлов")
+            await update.message.reply_text(f"послано {len(lesson_files)} файлов")
 
         # Calculate the default release time of the next lesson
         next_lesson = lesson + 1
@@ -325,12 +357,70 @@ async def get_current_lesson(update: Update, context: CallbackContext):
 
     except Exception as e:
         logger.error(f"Ошибка при получении текущего урока: {e}")
-        # Используем callback_query
+        # Используем callback_query, если это callback
         if update.callback_query:
             await update.callback_query.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
         else:
             await update.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
 
+# Qwen 15 марта утром
+async def process_lesson(user_id, lesson_number, active_course_id, context):
+    """Обрабатывает текст урока и отправляет связанные файлы."""
+    try:
+        # Читаем текст урока
+        lesson_text = get_lesson_text(lesson_number, active_course_id)
+        if lesson_text:
+            await context.bot.send_message(chat_id=user_id, text=lesson_text)
+        else:
+            await context.bot.send_message(chat_id=user_id, text="Текст урока не найден.")
+
+        # Получаем файлы для урока
+        lesson_files = get_lesson_files(user_id, lesson_number, active_course_id)
+
+        # Отправляем файлы
+        for file_info in lesson_files:
+            file_path = file_info['path']
+            file_type = file_info['type']
+            delay = file_info['delay']
+
+            if delay > 0:
+                logger.info(f"Задержка перед отправкой файла {file_path}: {delay} секунд")
+                await asyncio.sleep(delay)
+
+            try:
+                with open(file_path, 'rb') as file:
+                    if file_type == 'photo':
+                        await context.bot.send_photo(chat_id=user_id, photo=file)
+                    elif file_type == 'video':
+                        await context.bot.send_video(chat_id=user_id, video=file)
+                    elif file_type == 'audio':
+                        await context.bot.send_audio(chat_id=user_id, audio=file)
+                    else:
+                        await context.bot.send_document(chat_id=user_id, document=file)
+            except FileNotFoundError:
+                logger.error(f"Файл не найден: {file_path}")
+                await context.bot.send_message(chat_id=user_id, text=f"Файл не найден: {file_path}")
+            except Exception as e:
+                logger.error(f"Ошибка при отправке файла {file_path}: {e}")
+                await context.bot.send_message(chat_id=user_id, text=f"Ошибка при отправке файла: {e}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке урока: {e}")
+        await context.bot.send_message(chat_id=user_id, text="Произошла ошибка при обработке урока.")
+
+# Qwen 15 марта утром
+def get_lesson_text(lesson_number, active_course_id):
+    """Читает текст урока из файла."""
+    try:
+        lesson_text_path = os.path.join("courses", active_course_id, f"lesson{lesson_number}.txt")
+        with open(lesson_text_path, "r", encoding="utf-8") as file:
+            return file.read()
+    except FileNotFoundError:
+        logger.error(f"Файл урока не найден: {lesson_text_path}")
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка при чтении текста урока: {e}")
+        return None
 
 # Menu *
 async def show_main_menu(update: Update, context: CallbackContext):
@@ -1283,7 +1373,8 @@ async def self_approve_homework(update: Update, context: CallbackContext):
         await query.edit_message_text(text="Домашнее задание подтверждено вами.")
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
-        await query.message.reply_text(f"Домашнее задание подтверждено, но шота как то не того.")
+        await query.message.reply_text(f"Домашнее задание подтверждено, но не удалось изменить сообщение.")
+
 
 
 
@@ -1632,9 +1723,9 @@ def get_lesson_files(user_id, lesson_number, course_id):
                 if match:
                     delay_value = int(match.group(1))
                     delay_unit = match.group(2)
-                    if delay_unit == 'm':
+                    if delay_unit in ('min', 'm'):
                         delay = delay_value * 60  # minutes to seconds
-                    elif delay_unit == 'h':
+                    elif delay_unit in ('hour', 'h'):
                         delay = delay_value * 3600  # hours to seconds
 
                 file_type = 'document'  # Default
@@ -2401,7 +2492,7 @@ async def set_evening(update: Update, context: CallbackContext):
 
 def parse_delay_from_filename(filename):
     """
-    Извлекает время задержки из имени файла.
+    Извлекает время задержки из имени файла. TODO повторяет функционал get_lesson_files
     Возвращает задержку в секундах или None, если задержка не указана.
     """
     match = DELAY_PATTERN.search(filename)
