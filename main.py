@@ -53,8 +53,12 @@ class Course:
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()],
+    handlers=[
+        logging.FileHandler("bot.log", encoding="utf-8"),  # Указываем кодировку utf-8 для файла
+        logging.StreamHandler()  # Для вывода в консоль
+    ],
 )
+
 logger = logging.getLogger(__name__)
 
 COURSE_DATA_FILE = "courses.json"
@@ -111,18 +115,21 @@ def load_delay_messages(file_path="delay_messages.txt"):
     try:
         with open(file_path, "r", encoding="utf-8") as file:
             messages = [line.strip() for line in file if line.strip()]
+            logger.info(f"Загружено {len(messages)} фразочек ------------------------- 333")
         return messages
+
     except FileNotFoundError:
         logger.error(f"Файл c фразами не найден: {file_path}")
-        return ["Ещё материал идёт, домашнее задание - можно уже делать"]
+        return ["Ф Ещё материал идёт, домашнее задание - можно уже делать."]
+
     except Exception as e:
         logger.error(f"Ошибка при загрузке фраз из файла: {e}")
-        return ["Ещё материал идёт, домашнее задание - можно уже делать"]
+        return ["О Ещё материал идёт, домашнее задание - можно уже делать!"]
 
 
 # Загрузка фраз в начале программы
 DELAY_MESSAGES = load_delay_messages()
-logger.info(f"DELAY_MESSAGES  {DELAY_MESSAGES}")
+logger.info(f"DELAY_MESSAGES загружено {len(DELAY_MESSAGES)} строк {DELAY_MESSAGES[:3]}")
 
 
 load_dotenv()
@@ -312,7 +319,7 @@ def escape_markdown_v2(text):
 
 
 
-# текущий урок заново
+# текущий урок заново - из меню 321
 @handle_telegram_errors
 async def get_current_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отправляет все материалы текущего урока."""
@@ -325,10 +332,7 @@ async def get_current_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, u
         active_course_data = cursor.fetchone()
 
         if not active_course_data or not active_course_data[0]:
-            if update.callback_query:
-                await update.callback_query.message.reply_text("Активируйте курс через кодовое слово.")
-            else:
-                await update.message.reply_text("Активируйте курс через кодовое слово.")
+            await context.bot.send_message(chat_id=user_id, text="Активируйте курс через кодовое слово.")
             return
 
         active_course_id_full = active_course_data[0]
@@ -351,10 +355,7 @@ async def get_current_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, u
             )
             await conn.commit()
             logger.warning(f"Начали курс с первого урока: {active_course_id_full}")
-            if update.callback_query:
-                await update.callback_query.message.reply_text("Вы начинаете курс с первого урока.")
-            else:
-                await update.message.reply_text("Вы начинаете курс с первого урока.")
+            await context.bot.send_message(chat_id=user_id, text="Вы начинаете курс с первого урока.")
         else:
             lesson = progress_data[0]
 
@@ -369,19 +370,15 @@ async def get_current_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, u
         lesson_text, parse_mode = lesson_data
         logger.info(f"777 читаем lesson_text={lesson_text[:35]}  {parse_mode=} отправляем методом context.bot.send_message() -------")
         # Отправляем текст урока
-        if lesson_text:
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=lesson_text,
-                    parse_mode=parse_mode,
-                )
-            except Exception as e:
-                logger.error(f"Ошибка при отправке текста урока: {e}")
-                if update.callback_query:
-                    await update.callback_query.message.reply_text(f"Ошибка при отправке текста урока: {e}")
-                else:
-                    await update.message.reply_text(f"Ошибка при отправке текста урока: {e}")
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=lesson_text,
+                parse_mode=parse_mode,
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при отправке текста урока: {e}")
+            await context.bot.send_message(chat_id=user_id, text=f"Ошибка при отправке текста урока: {e}")
 
         # Отправляем файлы урока
         lesson_files = get_lesson_files(user_id, lesson, active_course_id)
@@ -393,11 +390,10 @@ async def get_current_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, u
 
             # Задержка перед отправкой
             if delay > 0:
-                logger.info(f"Ожидание {delay} секунд перед отправкой файла {file_path}")
-                if update.callback_query:
-                    await update.callback_query.message.reply_text("Ещё материал идёт, домашнее задание – можно уже делать.")
-                else:
-                    await update.message.reply_text("Ещё материал идёт, домашнее задание – можно уже делать.")
+                # Выбираем случайное сообщение из DELAY_MESSAGES
+                delay_message = random.choice(DELAY_MESSAGES)
+                logger.info(f"Ожидание {delay} секунд перед отправкой файла {file_path}. Сообщение: {delay_message}")
+                await context.bot.send_message(chat_id=user_id, text=delay_message)
                 await asyncio.sleep(delay)
 
             try:
@@ -416,22 +412,13 @@ async def get_current_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, u
 
             except FileNotFoundError:
                 logger.error(f"Файл не найден: {file_path}")
-                if update.callback_query:
-                    await update.callback_query.message.reply_text(f"Файл не найден: {file_path}")
-                else:
-                    await update.message.reply_text(f"Файл не найден: {file_path}")
+                await context.bot.send_message(chat_id=user_id, text=f"Файл не найден: {file_path}")
             except Exception as e:
                 logger.error(f"Ошибка при отправке файла: {e}")
-                if update.callback_query:
-                    await update.callback_query.message.reply_text(f"Ошибка при отправке файла: {e}")
-                else:
-                    await update.message.reply_text(f"Ошибка при отправке файла: {e}")
+                await context.bot.send_message(chat_id=user_id, text=f"Ошибка при отправке файла: {e}")
 
         # Сообщение о количестве отправленных файлов
-        if update.callback_query:
-            await update.callback_query.message.reply_text(f"Отправлено {len(lesson_files)} файлов.")
-        else:
-            await update.message.reply_text(f"Отправлено {len(lesson_files)} файлов.")
+        await context.bot.send_message(chat_id=user_id, text=f"Отправлено {len(lesson_files)} файлов.")
 
         # Рассчитываем время следующего урока
         next_lesson = lesson + 1
@@ -448,41 +435,7 @@ async def get_current_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, u
 
     except Exception as e:
         logger.error(f"Ошибка при получении текущего урока: {e}")
-        if update.callback_query:
-            await update.callback_query.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
-        else:
-            await update.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
-
-
-async def send_file_with_delay(user_id, file_info, context):
-    """Отправляет файл с задержкой."""
-    file_path = file_info["path"]
-    file_type = file_info["type"]
-    delay = file_info["delay"]
-
-    if delay > 0:
-        # Выбираем случайное сообщение из DELAY_MESSAGES
-        delay_message = random.choice(DELAY_MESSAGES)
-        logger.info(f"Задержка перед отправкой файла {file_path}: {delay} секунд {delay_message=}")
-        await context.bot.send_message(chat_id=user_id, text=delay_message)
-        await asyncio.sleep(delay)
-
-    try:
-        with open(file_path, "rb") as file:
-            if file_type == "photo":
-                await context.bot.send_photo(chat_id=user_id, photo=file)
-            elif file_type == "video":
-                await context.bot.send_video(chat_id=user_id, video=file)
-            elif file_type == "audio":
-                await context.bot.send_audio(chat_id=user_id, audio=file)
-            else:
-                await context.bot.send_document(chat_id=user_id, document=file)
-    except FileNotFoundError:
-        logger.error(f"Файл не найден: {file_path}")
-        await context.bot.send_message(chat_id=user_id, text=f"Файл не найден: {file_path}")
-    except Exception as e:
-        logger.error(f"Ошибка при отправке файла {file_path}: {e}")
-        await context.bot.send_message(chat_id=user_id, text=f"Ошибка при отправке файла: {e}")
+        await context.bot.send_message(chat_id=user_id, text="Ошибка при получении текущего урока. Попробуйте позже.")
 
 
 # Qwen 15 марта утром строго без conn: sqlite3.Connection, cursor: sqlite3.Cursor,
@@ -491,27 +444,61 @@ async def process_lesson(user_id, lesson_number, active_course_id, context):
     """Обрабатывает текст урока и отправляет связанные файлы."""
     try:
         # Читаем текст урока
-        lesson_text = get_lesson_text(lesson_number, active_course_id)
-        if lesson_text:
-            await context.bot.send_message(chat_id=user_id, text=lesson_text)
+        lesson_data = get_lesson_text(lesson_number, active_course_id)
+        if lesson_data:
+            lesson_text, parse_mode = lesson_data
+            try:
+                await context.bot.send_message(chat_id=user_id, text=lesson_text, parse_mode=parse_mode)
+            except Exception as e:
+                logger.error(f"Ошибка при отправке текста урока: {e}")
+                await context.bot.send_message(chat_id=user_id, text="Ошибка при отправке текста урока.")
         else:
             await context.bot.send_message(chat_id=user_id, text="Текст урока не найден.")
 
         # Получаем файлы для урока
         lesson_files = get_lesson_files(user_id, lesson_number, active_course_id)
 
-        # Создаем задачи для отправки файлов
-        tasks = []
-        for file_info in lesson_files:
-            task = asyncio.create_task(send_file_with_delay(user_id, file_info, context))
-            tasks.append(task)
+        # Отправляем файлы с задержкой и обрабатываем ошибки
+        async def send_file(file_info):
+            file_path = file_info["path"]
+            file_type = file_info["type"]
+            delay = file_info["delay"]
 
-        # Ожидаем завершения всех задач
+            try:
+                if delay > 0:
+                    delay_message = random.choice(DELAY_MESSAGES)
+                    logger.info(f"Ожидание {delay} секунд перед отправкой файла {file_path}. Сообщение: {delay_message}")
+                    await context.bot.send_message(chat_id=user_id, text=delay_message)
+                    await asyncio.sleep(delay)
+
+                if not os.path.exists(file_path):
+                    raise FileNotFoundError(f"Файл не найден: {file_path}")
+
+                with open(file_path, "rb") as file:
+                    if file_type == "photo":
+                        await context.bot.send_photo(chat_id=user_id, photo=file)
+                    elif file_type == "video":
+                        await context.bot.send_video(chat_id=user_id, video=file)
+                    elif file_type == "audio":
+                        await context.bot.send_audio(chat_id=user_id, audio=file)
+                    else:
+                        await context.bot.send_document(chat_id=user_id, document=file)
+
+            except FileNotFoundError:
+                logger.error(f"Файл не найден: {file_path}")
+                await context.bot.send_message(chat_id=user_id, text=f"Файл не найден: {file_path}")
+            except Exception as e:
+                logger.error(f"Ошибка при отправке файла {file_path}: {e}")
+                await context.bot.send_message(chat_id=user_id, text=f"Ошибка при отправке файла: {e}")
+
+        # Создаем задачи для отправки файлов и ждем их завершения
+        tasks = [send_file(file_info) for file_info in lesson_files]
         await asyncio.gather(*tasks)
 
     except Exception as e:
         logger.error(f"Ошибка при обработке урока: {e}")
         await context.bot.send_message(chat_id=user_id, text="Произошла ошибка при обработке урока.")
+
 
 
 def get_lesson_text(lesson_number, course_id):
@@ -554,6 +541,7 @@ def get_lesson_text(lesson_number, course_id):
     return None, None
 
 
+
 # Menu *
 async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     user = update.effective_user
@@ -570,7 +558,7 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
                 await update.callback_query.message.reply_text("Activate with code.")
             else:
                 await update.message.reply_text("Activate with code.")
-            return
+            return ConversationHandler.END # ADD RETURN
 
         active_course_id_full = active_course_data[0]
         # Short name
@@ -602,14 +590,18 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         full_name = cursor.fetchone()[0]
         homework = await get_homework_status_text(conn, cursor, user.id, active_course_id_full)
 
-        # Checking last homework
         lesson_files = get_lesson_files(user.id, progress, active_course_id)
-        last_lesson = check_last_lesson(active_course_id)
+        last_lesson = await check_last_lesson(conn, cursor, update, context)
+        # Checking if last_lesson None
+        if last_lesson is None:
+            logger.warning("last_lesson is None skipping course completion check")
+            return ConversationHandler.END # ADD RETURN
 
         # Checking if end and go to action
         if int(progress) >= int(last_lesson):
             await course_completion_actions(conn, cursor, update, context)
-            return
+            return ConversationHandler.END # ADD RETURN
+
         # Debug state
         if context.user_data.get("waiting_for_code"):
             state_emoji = "🔑"  # Key emoji for 'waiting_for_code' state
@@ -621,6 +613,7 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         Курс: {active_course_id} ({course_type}) {active_tariff}
         Прогресс: {progress_text}
         Домашка: {homework} введи /self_approve_{progress}"""
+
         # Make buttons
         keyboard = [
             [
@@ -638,6 +631,7 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
             ],
             [InlineKeyboardButton("🙋 ПоДдержка", callback_data="support")],
         ]
+
         # ADD DYNAMIC BUTTON
         # Find lesson
         next_lesson = progress + 1
@@ -659,7 +653,12 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         # Send menu
         # Using callback_query
         if update.callback_query:
-            await update.callback_query.message.reply_text(greeting, reply_markup=reply_markup)
+            try:
+                await update.callback_query.answer()
+                await update.callback_query.message.reply_text(greeting, reply_markup=reply_markup)
+            except TelegramError as e:
+                logger.error(f"Telegram API error: {e}")
+                await context.bot.send_message(user.id, "Произошла ошибка. Попробуйте позже.")
         else:
             await update.message.reply_text(greeting, reply_markup=reply_markup)
 
@@ -667,12 +666,16 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         logger.error(f"time {time.strftime('%H:%M:%S')} Error in show_main_menu: {str(e)}")
         # Using callback_query
         if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except TelegramError as e:
+                logger.error(f"Telegram API error when answering: {e}")
             await update.callback_query.message.reply_text("Error display menu. Try later.")
         else:
             await update.message.reply_text("Error display menu. Try later.")
+    return ConversationHandler.END # ADD RETURN
 
-
-# НАЧАЛО *
+@handle_telegram_errors
 async def start(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает команду /start."""
     user_id = update.effective_user.id
@@ -697,7 +700,6 @@ async def start(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update
         if not user_data:
             await update.effective_message.reply_text("Пожалуйста, введите ваше имя:")
             logger.info('запросили имя====================================')
-
             return WAIT_FOR_NAME
 
         else:
@@ -979,8 +981,137 @@ async def course_management(conn: sqlite3.Connection, cursor: sqlite3.Cursor, up
 
 
 # Обрабатывает отправку домашнего задания и отправляет его администратору (если требуется *
+# async def handle_homework_submission(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
+#     """Обрабатывает отправку домашнего задания (фото или документ)."""
+#     user_id = update.effective_user.id
+#     logger.info(f" handle_homework_submission {user_id=}")
+#
+#     # Определяем, что пришло: фото или документ
+#     if update.message.photo:
+#         # Получаем file_id самого большого фото (последнего в списке)
+#         file_id = update.message.photo[-1].file_id
+#         file_type = "photo"
+#     elif update.message.document and update.message.document.mime_type.startswith("image/"):
+#         # Получаем file_id документа и проверяем, что это изображение
+#         file_id = update.message.document.file_id
+#         file_type = "document"
+#     else:
+#         await update.message.reply_text("⚠️ Отправьте, пожалуйста, картинку или фотографию.")
+#         return
+#
+#     # Получаем active_course_id из users
+#     cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
+#     active_course_data = cursor.fetchone()
+#
+#     if not active_course_data or not active_course_data[0]:
+#         await update.message.reply_text("Пожалуйста, активируйте курс.")
+#         return
+#
+#     active_course_id_full = active_course_data[0]
+#     cursor.execute(
+#         """
+#         SELECT progress, tariff
+#         FROM user_courses
+#         WHERE user_id = ? AND course_id = ?
+#     """,
+#         (user_id, active_course_id_full),
+#     )
+#     progress_data = cursor.fetchone()
+#
+#     if not progress_data:
+#         await update.message.reply_text("Не найден прогресс курса.")
+#         return
+#
+#     lesson, tariff = progress_data
+#
+#     try:
+#         # Получаем информацию о файле
+#         file = await context.bot.get_file(file_id)
+#         file_ext = ".jpg"  # Ставим расширение по умолчанию
+#
+#         if file_type == "document":
+#             file_ext = mimetypes.guess_extension(update.message.document.mime_type) or file_ext
+#             if file_ext == ".jpe":
+#                 file_ext = ".jpg"  # Преобразуем .jpe в .jpg
+#         file_path = f"homeworks/{user_id}_{file.file_unique_id}{file_ext}"
+#         await file.download_to_drive(file_path)
+#
+#         # Сохраняем информацию о домашнем задании в базе данных
+#         cursor.execute(
+#             """
+#             INSERT INTO homeworks (user_id, course_id, lesson, file_path, status)
+#             VALUES (?, ?, ?, ?, ?)
+#         """,
+#             (user_id, active_course_id_full, lesson, file_path, "pending"),
+#         )
+#         conn.commit()
+#
+#         # Получаем hw_id только что добавленной записи
+#         cursor.execute(
+#             """
+#             SELECT hw_id FROM homeworks
+#             WHERE user_id = ? AND course_id = ? AND lesson = ?
+#             ORDER BY hw_id DESC LIMIT 1
+#         """,
+#             (user_id, active_course_id_full, lesson),
+#         )
+#         hw_id_data = cursor.fetchone()
+#         hw_id = hw_id_data[0] if hw_id_data else None
+#
+#         if hw_id is None:
+#             logger.error(f"Не удалось получить hw_id для user_id={user_id}, course_id={active_course_id_full}, lesson={lesson}")
+#             await update.message.reply_text("Произошла ошибка при обработке домашнего задания. Попробуйте позже.")
+#             return
+#
+#         # Если тариф с самопроверкой
+#         if tariff == "self_check":
+#             # Отправка кнопки для самопроверки пользователю
+#             keyboard = [
+#                 [
+#                     InlineKeyboardButton(
+#                         "✅ Принять домашнее задание",
+#                         callback_data=f"self_approve_{hw_id}",
+#                     )
+#                 ]
+#             ]
+#             reply_markup = InlineKeyboardMarkup(keyboard)
+#             await update.message.reply_text(
+#                 f"Домашнее задание по уроку {lesson} отправлено. Вы можете самостоятельно подтвердить выполнение.",
+#                 reply_markup=reply_markup,
+#             )
+#         else:
+#             # Отправка домашнего задания админу для проверки
+#             keyboard = [
+#                 [
+#                     InlineKeyboardButton("✅ Принять", callback_data=f"approve_homework_{hw_id}"),
+#                     InlineKeyboardButton("❌ Отклонить", callback_data=f"decline_homework_{hw_id}"),
+#                 ]
+#             ]
+#             reply_markup = InlineKeyboardMarkup(keyboard)
+#             admin_message = f"Пользователь {user_id} отправил домашнее задание по курсу {active_course_id_full}, урок {lesson}."
+#             try:
+#                 with open(file_path, "rb") as photo:
+#                     await context.bot.send_photo(
+#                         chat_id=ADMIN_GROUP_ID,
+#                         photo=photo,
+#                         caption=admin_message,
+#                         reply_markup=reply_markup,
+#                     )
+#                     logger.info(f"Sent homework to admin group for user {user_id}, lesson {lesson}")
+#             except Exception as e:
+#                 logger.error(f"Ошибка при отправке сообщения админу: {e}")
+#                 await update.message.reply_text("Произошла ошибка при отправке сообщения админу. Попробуйте позже.")
+#                 return
+#
+#         await update.message.reply_text("Домашнее задание отправлено на проверку.")
+#
+#     except Exception as e:
+#         logger.error(f"Ошибка при обработке домашнего задания: {e}")
+#         await update.message.reply_text("Произошла ошибка при обработке домашнего задания. Попробуйте позже.")
+
+
 async def handle_homework_submission(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
-    """Обрабатывает отправку домашнего задания (фото или документ)."""
+    """Обрабатывает отправку домашнего задания (фото или документ), отправляя его администратору."""
     user_id = update.effective_user.id
     logger.info(f" handle_homework_submission {user_id=}")
 
@@ -1023,24 +1154,13 @@ async def handle_homework_submission(conn: sqlite3.Connection, cursor: sqlite3.C
     lesson, tariff = progress_data
 
     try:
-        # Получаем информацию о файле
-        file = await context.bot.get_file(file_id)
-        file_ext = ".jpg"  # Ставим расширение по умолчанию
-
-        if file_type == "document":
-            file_ext = mimetypes.guess_extension(update.message.document.mime_type) or file_ext
-            if file_ext == ".jpe":
-                file_ext = ".jpg"  # Преобразуем .jpe в .jpg
-        file_path = f"homeworks/{user_id}_{file.file_unique_id}{file_ext}"
-        await file.download_to_drive(file_path)
-
         # Сохраняем информацию о домашнем задании в базе данных
         cursor.execute(
             """
-            INSERT INTO homeworks (user_id, course_id, lesson, file_path, status)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO homeworks (user_id, course_id, lesson, file_id, file_type, status)
+            VALUES (?, ?, ?, ?, ?, ?)
         """,
-            (user_id, active_course_id_full, lesson, file_path, "pending"),
+            (user_id, active_course_id_full, lesson, file_id, file_type, "pending"),
         )
         conn.commit()
 
@@ -1087,25 +1207,40 @@ async def handle_homework_submission(conn: sqlite3.Connection, cursor: sqlite3.C
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             admin_message = f"Пользователь {user_id} отправил домашнее задание по курсу {active_course_id_full}, урок {lesson}."
+
             try:
-                with open(file_path, "rb") as photo:
+                # Отправляем фото или документ администратору
+                if file_type == "photo":
                     await context.bot.send_photo(
                         chat_id=ADMIN_GROUP_ID,
-                        photo=photo,
+                        photo=file_id,
                         caption=admin_message,
                         reply_markup=reply_markup,
                     )
-                    logger.info(f"Sent homework to admin group for user {user_id}, lesson {lesson}")
+                elif file_type == "document":
+                    await context.bot.send_document(
+                        chat_id=ADMIN_GROUP_ID,
+                        document=file_id,
+                        caption=admin_message,
+                        reply_markup=reply_markup,
+                    )
+                logger.info(f"Отправлено домашнее задание админу для user {user_id}, урок {lesson}")
+
             except Exception as e:
                 logger.error(f"Ошибка при отправке сообщения админу: {e}")
                 await update.message.reply_text("Произошла ошибка при отправке сообщения админу. Попробуйте позже.")
                 return
 
         await update.message.reply_text("Домашнее задание отправлено на проверку.")
-
     except Exception as e:
         logger.error(f"Ошибка при обработке домашнего задания: {e}")
         await update.message.reply_text("Произошла ошибка при обработке домашнего задания. Попробуйте позже.")
+    finally:
+        # Показываем главное меню
+        await show_main_menu(conn, cursor, update, context)
+        return ACTIVE
+
+
 
 
 # Получение следующего времени урока
@@ -3048,21 +3183,71 @@ def get_preliminary_materials(course_id, lesson):
     return materials
 
 
-# проверим скока уроков всего строго ненадо conn: sqlite3.Connection, cursor: sqlite3.Cursor,
-def check_last_lesson(active_course_id):
-    """Checking amount of lessons"""
-    logger.info(f"check_last_lesson {active_course_id=}")
-    dir_path = f"courses/{active_course_id}"
-    count = 0
+# Настройка InlineKeyboard для перехода к группе
+async def check_last_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
+    """Проверяет количество оставшихся уроков в курсе и показывает InlineKeyboard."""
+    user_id = update.effective_user.id
+    query = update.callback_query
+    await query.answer()
+
     try:
-        for path in os.listdir(dir_path):
-            # check if current path
-            if os.path.isfile(os.path.join(dir_path, path)):
-                count += 1
+        # Получаем active_course_id из users
+        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
+        active_course_data = cursor.fetchone()
+
+        if not active_course_data or not active_course_data[0]:
+            await query.message.reply_text("У вас не активирован курс. Пожалуйста, введите кодовое слово.")
+            return None
+
+        active_course_id = active_course_data[0].split("_")[0]
+        logger.info(f"check_last_lesson active_course_id='{active_course_id}'")
+
+        # Получаем количество доступных файлов уроков для курса
+        count = 0
+        while True:
+            lesson_paths = [
+                f"courses/{active_course_id}/lesson{count + 1}.md",
+                f"courses/{active_course_id}/lesson{count + 1}.html",
+                f"courses/{active_course_id}/lesson{count + 1}.txt",
+            ]
+            found = any(os.path.exists(path) for path in lesson_paths)
+            if not found:
+                break
+            count += 1
+        logger.warning(f"count={count}")
+
+        # Получаем текущий прогресс пользователя
+        cursor.execute(
+            "SELECT progress FROM user_courses WHERE user_id = ? AND course_id LIKE ?",
+            (user_id, f"{active_course_id}%"),
+        )
+        progress_data = cursor.fetchone()
+        current_lesson = progress_data[0] if progress_data else 0
+
+        # Если текущий урок является последним
+        if current_lesson >= count:
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "Перейти в чат болтать", url="https://t.me/+-KUbE8NM7t40ZDky"
+                    )
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.message.reply_text(
+                "Поздравляем! Вы прошли все уроки этого курса! Вы можете перейти в чат, чтобы поделиться впечатлениями и пообщаться с другими участниками.",
+                reply_markup=reply_markup,
+            )
+        else:
+            await query.message.reply_text("В этом курсе еще есть уроки. Продолжайте обучение!")
+        # Возвращаем count, чтобы знать сколько всего уроков
+        return count
+
     except Exception as e:
-        logger.error(f"Error during checking  {e=}")
-    logger.warning(f"{count=}")
-    return count
+        logger.error(f"Ошибка при проверке последнего урока: {e}")
+        await query.message.reply_text("Произошла ошибка при проверке последнего урока.")
+        return None
+
 
 
 # Обработчик кнопки "Получить предварительные материалы"
@@ -3733,6 +3918,7 @@ def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
                 course_id TEXT,  
                 lesson INTEGER,
                 file_id TEXT,
+                file_type TEXT,
                 message_id INTEGER,
                 status TEXT DEFAULT 'pending',
                 feedback TEXT,
