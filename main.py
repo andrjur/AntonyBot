@@ -1,6 +1,7 @@
 # main.py
 
 import logging
+import mimetypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.ext import PicklePersistence
 from telegram import (
@@ -112,7 +113,6 @@ persistence = PicklePersistence(filepath="bot_data.pkl")
     WAIT_FOR_NAME,
     WAIT_FOR_CODE,
     ACTIVE,
-    HOMEWORK_RESPONSE,
     COURSE_SETTINGS,
     WAIT_FOR_SUPPORT_TEXT,
     WAIT_FOR_SELFIE,
@@ -120,7 +120,7 @@ persistence = PicklePersistence(filepath="bot_data.pkl")
     WAIT_FOR_CHECK,
     WAIT_FOR_GIFT_USER_ID,
     WAIT_FOR_PHONE_NUMBER,
-) = range(11)
+) = range(10)
 
 
 # Регулярное выражение для извлечения времени задержки из имени файла
@@ -133,9 +133,7 @@ DEFAULT_LESSON_INTERVAL = 0.1  # интервал уроков 72 часа а н
 
 DEFAULT_LESSON_DELAY_HOURS = 3
 
-logger.info(
-    f"{DEFAULT_LESSON_DELAY_HOURS=} {DEFAULT_LESSON_INTERVAL=} время старта {time.strftime('%d/%m/%Y %H:%M:%S')}"
-)
+logger.info(f"{DEFAULT_LESSON_DELAY_HOURS=} {DEFAULT_LESSON_INTERVAL=} время старта {time.strftime('%d/%m/%Y %H:%M:%S')}")
 
 PAYMENT_INFO_FILE = "payment_info.json"
 
@@ -144,7 +142,7 @@ PAYMENT_INFO_FILE = "payment_info.json"
 USER_CACHE = {}
 
 
-def get_user_data(user_id):
+def get_user_data(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int):  # Добавил conn и cursor
     """Получает данные пользователя из кэша или базы данных."""
     if user_id in USER_CACHE:
         return USER_CACHE[user_id]
@@ -159,14 +157,14 @@ def get_user_data(user_id):
     return None
 
 
-def clear_user_cache(user_id):
+def clear_user_cache(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int):  # Добавил conn и cursor
     """Очищает кэш для указанного пользователя."""
     logger.info(f" clear_user_cache {user_id} очистили")
     if user_id in USER_CACHE:
         del USER_CACHE[user_id]
 
 
-# кому платить
+# кому платить строго ненадо    conn: sqlite3.Connection, cursor: sqlite3.Cursor,
 def load_payment_info(filename):
     """Загружает данные об оплате из JSON файла."""
     try:
@@ -188,14 +186,16 @@ def load_payment_info(filename):
 PAYMENT_INFO = load_payment_info(PAYMENT_INFO_FILE)
 
 
-async def handle_error(update: Update, context: CallbackContext, error: Exception):
+async def handle_error(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext, error: Exception):
     """Handles errors that occur in the bot."""
     logger.error(f"Error: {error}")
     await update.message.reply_text("Произошла ошибка. Попробуйте позже.")
 
 
 # получение имени и проверка *
-async def handle_user_info(update: Update, context: CallbackContext):
+async def handle_user_info(
+    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext
+):  # Добавил conn и cursor
     user_id = update.effective_user.id
     full_name = update.effective_message.text.strip()
 
@@ -204,9 +204,7 @@ async def handle_user_info(update: Update, context: CallbackContext):
 
     # Проверка на пустое имя
     if not full_name:
-        await update.effective_message.reply_text(
-            "Имя не может быть пустым. Введите ваше полное имя:"
-        )
+        await update.effective_message.reply_text("Имя не может быть пустым. Введите ваше полное имя:")
         return WAIT_FOR_NAME
 
     try:
@@ -223,7 +221,7 @@ async def handle_user_info(update: Update, context: CallbackContext):
         conn.commit()
 
         # Подтверждение записи
-        user_data = get_user_data(user_id)
+        user_data = get_user_data(conn, cursor, user_id)  # Добавил conn и cursor
         if user_data:
             saved_name = user_data["full_name"]
         else:
@@ -234,23 +232,21 @@ async def handle_user_info(update: Update, context: CallbackContext):
             print(f"Имя не совпадает с сохраненным {saved_name} != {full_name}")
 
         # Успешное сохранение, переход к следующему шагу
-        await update.effective_message.reply_text(
-            f"Отлично, {full_name}! Теперь введите кодовое слово для активации курса."
-        )
+        await update.effective_message.reply_text(f"Отлично, {full_name}! Теперь введите кодовое слово для активации курса.")
         return WAIT_FOR_CODE
 
     except Exception as e:
         # Обработка ошибок при сохранении имени
         logger.error(f"Ошибка при сохранении имени: {e}")
         logger.error(f"Ошибка SQL при сохранении пользователя {user_id}: {e}")
-        await update.effective_message.reply_text(
-            "Произошла ошибка при сохранении данных. Попробуйте снова."
-        )
+        await update.effective_message.reply_text("Произошла ошибка при сохранении данных. Попробуйте снова.")
         return WAIT_FOR_NAME
 
 
 # проверка оплаты через кодовые слова *
-async def handle_code_words(update: Update, context: CallbackContext):
+async def handle_code_words(
+    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext
+):  # Добавил conn и cursor
     user_id = update.message.from_user.id
     user_code = update.message.text.strip()
 
@@ -259,16 +255,14 @@ async def handle_code_words(update: Update, context: CallbackContext):
 
     if user_code in COURSE_DATA:
         # Активируем курс
-        await activate_course(update, context, user_id, user_code)
+        await activate_course(conn, cursor, update, context, user_id, user_code)
         logger.info(f" активирован {user_id}  return ACTIVE ")
 
         # Отправляем текущий урок
         await get_current_lesson(update, context)
 
         # Отправляем сообщение
-        await update.message.reply_text(
-            "Курс активирован! Вы переходите в главное меню."
-        )
+        await update.message.reply_text("Курс активирован! Вы переходите в главное меню.")
 
         # Сбрасываем состояние ожидания кодового слова
         context.user_data["waiting_for_code"] = False
@@ -284,22 +278,21 @@ async def handle_code_words(update: Update, context: CallbackContext):
 # текущий урок заново
 async def get_current_lesson(update: Update, context: CallbackContext):
     """Отправляет все материалы текущего урока."""
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+
     user_id = update.effective_user.id
     logger.info(f" 777 get_current_lesson {user_id} - Current state")
 
     try:
         # Получаем active_course_id из users
-        cursor.execute(
-            "SELECT active_course_id FROM users WHERE user_id = ?", (user_id,)
-        )
+        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
         active_course_data = cursor.fetchone()
 
         if not active_course_data or not active_course_data[0]:
             # Используем callback_query, если это callback
             if update.callback_query:
-                await update.callback_query.message.reply_text(
-                    "Активируйте курс через кодовое слово."
-                )
+                await update.callback_query.message.reply_text("Активируйте курс через кодовое слово.")
             else:
                 await update.message.reply_text("Активируйте курс через кодовое слово.")
             return
@@ -336,43 +329,16 @@ async def get_current_lesson(update: Update, context: CallbackContext):
             )
 
             conn.commit()
-            logger.warning(
-                f" get_current_lesson с 1 урока начали на нижнем тарифе (самый быстрый) {active_course_id_full=}"
-            )
+            logger.warning(f" get_current_lesson с 1 урока начали на нижнем тарифе (самый быстрый) {active_course_id_full=}")
             # Используем callback_query, если это callback
             if update.callback_query:
-                await update.callback_query.message.reply_text(
-                    "Вы начинаете курс с первого урока."
-                )
+                await update.callback_query.message.reply_text("Вы начинаете курс с первого урока.")
             else:
                 await update.message.reply_text("Вы начинаете курс с первого урока.")
         else:
             lesson = progress_data[0]
 
-        # Формируем путь к файлу урока
-        file_path = os.path.join("courses", active_course_id, f"lesson{lesson}.txt")
-        logger.warning(f" 7777777 Файл урока {file_path=}")
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                lesson_text = f.read()
-            # Используем callback_query, если это callback
-            if update.callback_query:
-                await update.callback_query.message.reply_text(lesson_text)
-            else:
-                await update.message.reply_text(lesson_text)
-
-        except FileNotFoundError:
-            logger.error(f"Файл урока не найден: {file_path}")
-            # Используем callback_query, если это callback
-            if update.callback_query:
-                await update.callback_query.message.reply_text(
-                    f"Файл урока не найден. Возможно, это последний урок."
-                )
-            else:
-                await update.message.reply_text(
-                    f"Файл урока не найден. Возможно, это последний урок."
-                )
-            return
+        lesson_text = get_lesson_text(lesson, active_course_id)  #
 
         # Add media in function
         lesson_files = get_lesson_files(user_id, lesson, active_course_id)
@@ -380,23 +346,15 @@ async def get_current_lesson(update: Update, context: CallbackContext):
             file_path = file_info["path"]
             file_type = file_info["type"]
             delay = file_info["delay"]  # Получаем задержку
-            logger.info(
-                f" {i} файл {file_path=} {file_type=} {delay=}"
-            )  # добавить в лог
+            logger.info(f" {i} файл {file_path=} {file_type=} {delay=}")  # добавить в лог
 
             # Задержка перед отправкой
             if delay > 0:
-                logger.info(
-                    f"Ожидание {delay} секунд перед отправкой файла {file_path}"
-                )
+                logger.info(f"Ожидание {delay} секунд перед отправкой файла {file_path}")
                 if update.callback_query:
-                    await update.callback_query.message.reply_text(
-                        "ещё материал идёт, домашнее задание – можно уже делать"
-                    )
+                    await update.callback_query.message.reply_text("ещё материал идёт, домашнее задание – можно уже делать")
                 else:
-                    await update.message.reply_text(
-                        "ещё материал идёт, домашнее задание – можно уже делать"
-                    )
+                    await update.message.reply_text("ещё материал идёт, домашнее задание – можно уже делать")
                 await asyncio.sleep(delay)
 
             try:
@@ -413,34 +371,24 @@ async def get_current_lesson(update: Update, context: CallbackContext):
             except FileNotFoundError:
                 logger.error(f"Media file not found: {file_path}")
                 if update.callback_query:
-                    await update.callback_query.message.reply_text(
-                        f"Media file not found: {file_path}"
-                    )
+                    await update.callback_query.message.reply_text(f"Media file not found: {file_path}")
                 else:
-                    await update.message.reply_text(
-                        f"Media file not found: {file_path}"
-                    )
+                    await update.message.reply_text(f"Media file not found: {file_path}")
             except Exception as e:
                 logger.error(f"Error sending media file: {e}")
                 if update.callback_query:
-                    await update.callback_query.message.reply_text(
-                        f"Error sending media file. {e}"
-                    )
+                    await update.callback_query.message.reply_text(f"Error sending media file. {e}")
                 else:
                     await update.message.reply_text(f"Error sending media file. {e}")
 
         if update.callback_query:
-            await update.callback_query.message.reply_text(
-                f"послано {len(lesson_files)} файлов"
-            )
+            await update.callback_query.message.reply_text(f"послано {len(lesson_files)} файлов")
         else:
             await update.message.reply_text(f"послано {len(lesson_files)} файлов")
 
         # Calculate the default release time of the next lesson
         next_lesson = lesson + 1
-        next_lesson_release_time = datetime.now() + timedelta(
-            hours=DEFAULT_LESSON_INTERVAL
-        )
+        next_lesson_release_time = datetime.now() + timedelta(hours=DEFAULT_LESSON_INTERVAL)
         next_lesson_release_str = next_lesson_release_time.strftime("%d-%m-%Y %H:%M:%S")
         await context.bot.send_message(
             chat_id=user_id,
@@ -449,22 +397,18 @@ async def get_current_lesson(update: Update, context: CallbackContext):
         logger.info(f" 555 След урок {next_lesson} будет в {next_lesson_release_str}")
 
         # и показываем меню чтоб далеко не тянуться
-        await show_main_menu(update, context)
+        await show_main_menu(conn, cursor, update, context)  # Добавил conn и cursor
 
     except Exception as e:
         logger.error(f"Ошибка при получении текущего урока: {e}")
         # Используем callback_query, если это callback
         if update.callback_query:
-            await update.callback_query.message.reply_text(
-                "Ошибка при получении текущего урока. Попробуйте позже."
-            )
+            await update.callback_query.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
         else:
-            await update.message.reply_text(
-                "Ошибка при получении текущего урока. Попробуйте позже."
-            )
+            await update.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
 
 
-# Qwen 15 марта утром
+# Qwen 15 марта утром строго без conn: sqlite3.Connection, cursor: sqlite3.Cursor,
 async def process_lesson(user_id, lesson_number, active_course_id, context):
     """Обрабатывает текст урока и отправляет связанные файлы."""
     try:
@@ -473,9 +417,7 @@ async def process_lesson(user_id, lesson_number, active_course_id, context):
         if lesson_text:
             await context.bot.send_message(chat_id=user_id, text=lesson_text)
         else:
-            await context.bot.send_message(
-                chat_id=user_id, text="Текст урока не найден."
-            )
+            await context.bot.send_message(chat_id=user_id, text="Текст урока не найден.")
 
         # Получаем файлы для урока
         lesson_files = get_lesson_files(user_id, lesson_number, active_course_id)
@@ -489,9 +431,7 @@ async def process_lesson(user_id, lesson_number, active_course_id, context):
             if delay > 0:
                 # Выбираем случайное сообщение из DELAY_MESSAGES
                 delay_message = random.choice(DELAY_MESSAGES)
-                logger.info(
-                    f"Задержка перед отправкой файла {file_path}: {delay} секунд {delay_message=}"
-                )
+                logger.info(f"Задержка перед отправкой файла {file_path}: {delay} секунд {delay_message=}")
                 await context.bot.send_message(chat_id=user_id, text=delay_message)
                 await asyncio.sleep(delay)
 
@@ -507,33 +447,25 @@ async def process_lesson(user_id, lesson_number, active_course_id, context):
                         await context.bot.send_document(chat_id=user_id, document=file)
             except FileNotFoundError:
                 logger.error(f"Файл не найден: {file_path}")
-                await context.bot.send_message(
-                    chat_id=user_id, text=f"Файл не найден: {file_path}"
-                )
+                await context.bot.send_message(chat_id=user_id, text=f"Файл не найден: {file_path}")
             except Exception as e:
                 logger.error(f"Ошибка при отправке файла {file_path}: {e}")
-                await context.bot.send_message(
-                    chat_id=user_id, text=f"Ошибка при отправке файла: {e}"
-                )
+                await context.bot.send_message(chat_id=user_id, text=f"Ошибка при отправке файла: {e}")
 
     except Exception as e:
         logger.error(f"Ошибка при обработке урока: {e}")
-        await context.bot.send_message(
-            chat_id=user_id, text="Произошла ошибка при обработке урока."
-        )
+        await context.bot.send_message(chat_id=user_id, text="Произошла ошибка при обработке урока.")
 
 
-# Qwen 15 марта утром
+# Qwen 15 марта утром строго ненадо   conn: sqlite3.Connection, cursor: sqlite3.Cursor,
 def get_lesson_text(lesson_number, active_course_id):
     """Читает текст урока из файла."""
     try:
-        lesson_text_path = os.path.join(
-            "courses", active_course_id, f"lesson{lesson_number}.txt"
-        )
+        lesson_text_path = os.path.join("courses", active_course_id, f"lesson{lesson_number}.txt")
         with open(lesson_text_path, "r", encoding="utf-8") as file:
             return file.read()
     except FileNotFoundError:
-        logger.error(f"Файл урока не найден: {lesson_text_path}")
+        logger.error(f"Файл урока не найден: ")
         return None
     except Exception as e:
         logger.error(f"Ошибка при чтении текста урока: {e}")
@@ -541,15 +473,13 @@ def get_lesson_text(lesson_number, active_course_id):
 
 
 # Menu *
-async def show_main_menu(update: Update, context: CallbackContext):
+async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     user = update.effective_user
     logger.info(f"{user} - show_main_menu")
 
     try:
         # Get data of course
-        cursor.execute(
-            "SELECT active_course_id FROM users WHERE user_id = ?", (user.id,)
-        )
+        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user.id,))
         active_course_data = cursor.fetchone()
 
         if not active_course_data or not active_course_data[0]:
@@ -563,11 +493,7 @@ async def show_main_menu(update: Update, context: CallbackContext):
         active_course_id_full = active_course_data[0]
         # Short name
         active_course_id = active_course_id_full.split("_")[0]
-        active_tariff = (
-            active_course_id_full.split("_")[1]
-            if len(active_course_id_full.split("_")) > 1
-            else "default"
-        )
+        active_tariff = active_course_id_full.split("_")[1] if len(active_course_id_full.split("_")) > 1 else "default"
 
         # Data of course
         cursor.execute(
@@ -592,7 +518,7 @@ async def show_main_menu(update: Update, context: CallbackContext):
         # Get username
         cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user.id,))
         full_name = cursor.fetchone()[0]
-        homework = await get_homework_status_text(user.id, active_course_id_full)
+        homework = await get_homework_status_text(conn, cursor, user.id, active_course_id_full)
 
         # Checking last homework
         lesson_files = get_lesson_files(user.id, progress, active_course_id)
@@ -600,7 +526,7 @@ async def show_main_menu(update: Update, context: CallbackContext):
 
         # Checking if end and go to action
         if int(progress) >= int(last_lesson):
-            await course_completion_actions(update, context)
+            await course_completion_actions(conn, cursor, update, context)
             return
         # Debug state
         if context.user_data.get("waiting_for_code"):
@@ -608,19 +534,15 @@ async def show_main_menu(update: Update, context: CallbackContext):
         else:
             state_emoji = "✅"  # Checkmark for other states
 
-        progress_text = (
-            f"Текущий урок: {progress}" if progress else "Прогресс отсутствует"
-        )
+        progress_text = f"Текущий урок: {progress}" if progress else "Прогресс отсутствует"
         greeting = f"""Приветствую, {full_name.split()[0]}! {state_emoji}
         Курс: {active_course_id} ({course_type}) {active_tariff}
         Прогресс: {progress_text}
-        Домашка: {homework}"""
+        Домашка: {homework} введи /self_approve_{progress}"""
         # Make buttons
         keyboard = [
             [
-                InlineKeyboardButton(
-                    "📚 Текущий Урок - повтори всё", callback_data="get_current_lesson"
-                ),
+                InlineKeyboardButton("📚 Текущий Урок - повтори всё", callback_data="get_current_lesson"),
                 InlineKeyboardButton("🖼 Галерея ДЗ", callback_data="gallery"),
             ],
             [
@@ -630,9 +552,7 @@ async def show_main_menu(update: Update, context: CallbackContext):
                 )
             ],
             [
-                InlineKeyboardButton(
-                    "💰 Тарифы и Бонусы <- тут много", callback_data="tariffs"
-                ),
+                InlineKeyboardButton("💰 Тарифы и Бонусы <- тут много", callback_data="tariffs"),
             ],
             [InlineKeyboardButton("🙋 ПоДдержка", callback_data="support")],
         ]
@@ -657,34 +577,26 @@ async def show_main_menu(update: Update, context: CallbackContext):
         # Send menu
         # Using callback_query
         if update.callback_query:
-            await update.callback_query.message.reply_text(
-                greeting, reply_markup=reply_markup
-            )
+            await update.callback_query.message.reply_text(greeting, reply_markup=reply_markup)
         else:
             await update.message.reply_text(greeting, reply_markup=reply_markup)
 
     except Exception as e:
-        logger.error(
-            f"time {time.strftime('%H:%M:%S')} Error in show_main_menu: {str(e)}"
-        )
+        logger.error(f"time {time.strftime('%H:%M:%S')} Error in show_main_menu: {str(e)}")
         # Using callback_query
         if update.callback_query:
-            await update.callback_query.message.reply_text(
-                "Error display menu. Try later."
-            )
+            await update.callback_query.message.reply_text("Error display menu. Try later.")
         else:
             await update.message.reply_text("Error display menu. Try later.")
 
 
 # НАЧАЛО *
-async def start(update: Update, context: CallbackContext):
+async def start(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает команду /start."""
     user_id = update.effective_user.id
 
     # Логирование команды /НАЧАЛО
-    logger.info(
-        f"  start {user_id} - НАЧАЛО ================================================================="
-    )
+    logger.info(f"  start {user_id} - НАЧАЛО =================================================================")
 
     try:
         # Получение данных о пользователе из базы данных
@@ -702,29 +614,21 @@ async def start(update: Update, context: CallbackContext):
         # Если пользователь не найден, запрашиваем имя
         if not user_data:
             await update.effective_message.reply_text("Пожалуйста, введите ваше имя:")
-            context.user_data["waiting_for_name"] = (
-                True  # Устанавливаем состояние ожидания имени
-            )
+            context.user_data["waiting_for_name"] = True  # Устанавливаем состояние ожидания имени
             return WAIT_FOR_NAME
         else:
             # Проверяем, есть ли активный курс
-            cursor.execute(
-                "SELECT active_course_id FROM users WHERE user_id = ?", (user_id,)
-            )
+            cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
             active_course = cursor.fetchone()[0]
 
             # Если курсы не активированы, запрашиваем кодовое слово
             if not active_course:
-                await update.effective_message.reply_text(
-                    "Для начала введите кодовое слово вашего курса:"
-                )
-                context.user_data["waiting_for_code"] = (
-                    True  # Устанавливаем состояние ожидания кодового слова
-                )
+                await update.effective_message.reply_text("Для начала введите кодовое слово вашего курса:")
+                context.user_data["waiting_for_code"] = True  # Устанавливаем состояние ожидания кодового слова
                 return WAIT_FOR_CODE
             else:
                 # Если курсы активированы, показываем главное меню
-                await show_main_menu(update, context)
+                await show_main_menu(conn, cursor, update, context)
                 return ACTIVE  # Переходим в состояние ACTIVE
     except Exception as e:
         logger.error(f"Ошибка в функции НАЧАЛО start: {e}")
@@ -732,7 +636,7 @@ async def start(update: Update, context: CallbackContext):
         return ConversationHandler.END
 
 
-async def course_completion_actions(update: Update, context: CallbackContext):
+async def course_completion_actions(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Actions to perform upon course completion."""
     user_id = update.effective_user.id
     logger.info(f"course_completion_actions  {user_id} 44 ")
@@ -743,7 +647,7 @@ async def course_completion_actions(update: Update, context: CallbackContext):
     # Inform user
     await update.message.reply_text("Congratulations, you have finished the course")
 
-    await show_statistics(update, context)
+    await show_statistics(conn, cursor, update, context)
 
     # Update to aux
     cursor.execute(
@@ -767,14 +671,14 @@ async def course_completion_actions(update: Update, context: CallbackContext):
     conn.commit()
 
     # Generate button to watch every lesson
-    available_lessons = get_available_lessons(active_course_id_full)
-    keyboard = generate_lesson_keyboard(available_lessons)
+    available_lessons = get_available_lessons(conn, cursor, active_course_id_full)
+    keyboard = generate_lesson_keyboard(conn, cursor, available_lessons)
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text("All finished .", reply_markup=reply_markup)
 
 
-def get_available_lessons(course_id):
+def get_available_lessons(conn: sqlite3.Connection, cursor: sqlite3.Cursor, course_id):
     """Get all existing lessons by course."""
     lesson_dir = f"courses/{course_id}/"
     lessons = [
@@ -787,7 +691,7 @@ def get_available_lessons(course_id):
     return lessons
 
 
-def generate_lesson_keyboard(lessons, items_per_page=10):
+def generate_lesson_keyboard(conn: sqlite3.Connection, cursor: sqlite3.Cursor, lessons, items_per_page=10):
     """Generate buttons with page"""
     keyboard = []
     logger.info(f"generate_lesson_keyboard ")
@@ -797,7 +701,7 @@ def generate_lesson_keyboard(lessons, items_per_page=10):
 
 
 # домашка ???
-async def get_homework_status_text(user_id, course_id):
+async def get_homework_status_text(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id, course_id):
     """Возвращает текст статуса проверки домашнего задания."""
     # Проверяем статус домашнего задания
     cursor.execute(
@@ -840,23 +744,17 @@ async def get_homework_status_text(user_id, course_id):
 
 
 # проверка активации курсов *
-async def activate_course(update: Update, context: CallbackContext, user_id, user_code):
+async def activate_course(
+    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext, user_id: int, user_code: str
+):  # Добавил conn и cursor
     """Активирует курс для пользователя."""
 
     # Получаем данные о курсе из COURSE_DATA по кодовому слову
     course = COURSE_DATA[user_code]
-    course_id_full = (
-        course.course_id
-    )  # Полное название курса (например, femininity_premium)
-    course_id = course_id_full.split("_")[
-        0
-    ]  # Базовое название курса (например, femininity)
+    course_id_full = course.course_id  # Полное название курса (например, femininity_premium)
+    course_id = course_id_full.split("_")[0]  # Базовое название курса (например, femininity)
     course_type = course.course_type  # 'main' или 'auxiliary'
-    tariff = (
-        course_id_full.split("_")[1]
-        if len(course_id_full.split("_")) > 1
-        else "default"
-    )  # Тариф (premium, self_check и т.д.)
+    tariff = course_id_full.split("_")[1] if len(course_id_full.split("_")) > 1 else "default"  # Тариф (premium, self_check и т.д.)
     logger.info(f"activate_course {tariff} {course_id_full}")
     try:
         # Проверяем, есть ли уже какой-то курс с таким базовым названием у пользователя
@@ -889,9 +787,7 @@ async def activate_course(update: Update, context: CallbackContext, user_id, use
                     (course_id_full, tariff, user_id, existing_course_id),
                 )
                 conn.commit()
-                await update.message.reply_text(
-                    f"Вы перешли с тарифа {existing_tariff} на тариф {tariff}."
-                )
+                await update.message.reply_text(f"Вы перешли с тарифа {existing_tariff} на тариф {tariff}.")
 
                 # Обновляем active_course_id в users
                 cursor.execute(
@@ -903,9 +799,7 @@ async def activate_course(update: Update, context: CallbackContext, user_id, use
                     (course_id_full, user_id),
                 )
                 conn.commit()
-                logger.info(
-                    f"Обновлен тариф пользователя {user_id} с {existing_tariff} на {tariff} для курса {course_id}"
-                )
+                logger.info(f"Обновлен тариф пользователя {user_id} с {existing_tariff} на {tariff} для курса {course_id}")
 
                 return  # Важно: завершаем функцию после обновления
         else:
@@ -931,21 +825,15 @@ async def activate_course(update: Update, context: CallbackContext, user_id, use
                 (course_id_full, user_id),
             )
             conn.commit()
-            logger.info(
-                f"Курс {course_id} типа {course_type} активирован для пользователя {user_id} с тарифом {tariff}"
-            )
+            logger.info(f"Курс {course_id} типа {course_type} активирован для пользователя {user_id} с тарифом {tariff}")
 
     except Exception as e:
-        logger.error(
-            f"Ошибка при активации или обновлении курса для пользователя {user_id}: {e}"
-        )
-        await update.message.reply_text(
-            "Произошла ошибка при активации курса. Попробуйте позже."
-        )
+        logger.error(f"Ошибка при активации или обновлении курса для пользователя {user_id}: {e}")
+        await update.message.reply_text("Произошла ошибка при активации курса. Попробуйте позже.")
 
 
 # вычисляем время следующего урока *
-async def update_next_lesson_time(user_id, course_id):
+async def update_next_lesson_time(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id, course_id):
     """Обновляет время следующего урока для пользователя."""
     try:
         # Получаем текущее время
@@ -966,16 +854,14 @@ async def update_next_lesson_time(user_id, course_id):
         )
         conn.commit()
 
-        logger.info(
-            f"Для пользователя {user_id} установлено время следующего урока: {next_lesson_time_str}"
-        )
+        logger.info(f"Для пользователя {user_id} установлено время следующего урока: {next_lesson_time_str}")
 
     except Exception as e:
         logger.error(f"Ошибка при обновлении времени следующего урока: {e}")
 
 
 # управление курсом и КНОПОЧКИ СВОИ *
-async def course_management(update: Update, context: CallbackContext):
+async def course_management(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Управление курсом."""
     user_id = update.effective_user.id
     logger.info(f" 445566 course_management {user_id}")
@@ -1003,38 +889,44 @@ async def course_management(update: Update, context: CallbackContext):
         [InlineKeyboardButton("Мои курсы", callback_data="my_courses")],
         [InlineKeyboardButton("История ДЗ", callback_data="hw_history")],
     ]
-    await update.message.reply_text(
-        "Управление курсом:", reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_text("Управление курсом:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # Обрабатывает отправку домашнего задания и отправляет его администратору (если требуется *
-async def handle_homework_submission(update: Update, context: CallbackContext):
-    """Обрабатывает отправку домашнего задания."""
+async def handle_homework_submission(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
+    """Обрабатывает отправку домашнего задания (фото или документ)."""
     user_id = update.effective_user.id
-    logger.info(f"Получено домашнее задание от пользователя {user_id}")
+    logger.info(f" handle_homework_submission {user_id=}")
 
-    # Сразу отправляем уведомление пользователю
-    await update.message.reply_text("Домашнее задание получено.")
+    # Определяем, что пришло: фото или документ
+    if update.message.photo:
+        # Получаем file_id самого большого фото (последнего в списке)
+        file_id = update.message.photo[-1].file_id
+        file_type = "photo"
+    elif update.message.document and update.message.document.mime_type.startswith("image/"):
+        # Получаем file_id документа и проверяем, что это изображение
+        file_id = update.message.document.file_id
+        file_type = "document"
+    else:
+        await update.message.reply_text("⚠️ Отправьте, пожалуйста, картинку или фотографию.")
+        return
 
-    # Проверяем, есть ли активный курс
+    # Получаем active_course_id из users
     cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
     active_course_data = cursor.fetchone()
 
     if not active_course_data or not active_course_data[0]:
-        await update.message.reply_text("У вас нет активного курса.")
+        await update.message.reply_text("Пожалуйста, активируйте курс.")
         return
 
-    active_course_id = active_course_data[0]
-
-    # Получаем прогресс пользователя
+    active_course_id_full = active_course_data[0]
     cursor.execute(
         """
-        SELECT progress 
-        FROM user_courses 
+        SELECT progress, tariff
+        FROM user_courses
         WHERE user_id = ? AND course_id = ?
     """,
-        (user_id, active_course_id),
+        (user_id, active_course_id_full),
     )
     progress_data = cursor.fetchone()
 
@@ -1042,39 +934,55 @@ async def handle_homework_submission(update: Update, context: CallbackContext):
         await update.message.reply_text("Не найден прогресс курса.")
         return
 
-    lesson = progress_data[0]
-
-    # Получаем file_id отправленного фото
-    file_id = update.message.photo[-1].file_id
-    logger.info(f"File ID домашнего задания: {file_id}")
+    lesson, tariff = progress_data
 
     try:
-        # Асинхронное сохранение домашнего задания
-        await asyncio.to_thread(
-            cursor.execute,
+        # Получаем информацию о файле
+        file = await context.bot.get_file(file_id)
+        file_ext = ".jpg"  # Ставим расширение по умолчанию
+
+        if file_type == "document":
+            file_ext = mimetypes.guess_extension(update.message.document.mime_type) or file_ext
+            if file_ext == ".jpe":
+                file_ext = ".jpg"  # Преобразуем .jpe в .jpg
+        file_path = f"homeworks/{user_id}_{file.file_unique_id}{file_ext}"
+        await file.download_to_drive(file_path)
+
+        # Сохраняем информацию о домашнем задании в базе данных
+        cursor.execute(
             """
-            INSERT INTO homeworks (user_id, course_id, lesson, file_id, status)
+            INSERT INTO homeworks (user_id, course_id, lesson, file_path, status)
             VALUES (?, ?, ?, ?, ?)
         """,
-            (user_id, active_course_id, lesson, file_id, "pending"),
+            (user_id, active_course_id_full, lesson, file_path, "pending"),
         )
         conn.commit()
 
-        logger.info(f"Домашнее задание сохранено для пользователя {user_id}")
+        # Получаем hw_id только что добавленной записи
+        cursor.execute(
+            """
+            SELECT hw_id FROM homeworks 
+            WHERE user_id = ? AND course_id = ? AND lesson = ?
+            ORDER BY hw_id DESC LIMIT 1
+        """,
+            (user_id, active_course_id_full, lesson),
+        )
+        hw_id_data = cursor.fetchone()
+        hw_id = hw_id_data[0] if hw_id_data else None
 
-        # Определяем тариф пользователя
-        cursor.execute("SELECT tariff FROM user_courses WHERE user_id = ?", (user_id,))
-        tariff_data = cursor.fetchone()
-        tariff = tariff_data[0] if tariff_data else "self_check"
+        if hw_id is None:
+            logger.error(f"Не удалось получить hw_id для user_id={user_id}, course_id={active_course_id_full}, lesson={lesson}")
+            await update.message.reply_text("Произошла ошибка при обработке домашнего задания. Попробуйте позже.")
+            return
 
-        # Отправляем уведомление пользователю
+        # Если тариф с самопроверкой
         if tariff == "self_check":
-            # Тариф с самопроверкой
+            # Отправка кнопки для самопроверки пользователю
             keyboard = [
                 [
                     InlineKeyboardButton(
                         "✅ Принять домашнее задание",
-                        callback_data=f"self_approve_{lesson}",
+                        callback_data=f"self_approve_{hw_id}",
                     )
                 ]
             ]
@@ -1084,24 +992,38 @@ async def handle_homework_submission(update: Update, context: CallbackContext):
                 reply_markup=reply_markup,
             )
         else:
-            # Тариф с проверкой администратором - говорим пользователю
-            await update.message.reply_text(
-                "Домашнее задание отправлено на проверку администратору."
-            )
+            # Отправка домашнего задания админу для проверки
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Принять", callback_data=f"approve_homework_{hw_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"decline_homework_{hw_id}"),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            admin_message = f"Пользователь {user_id} отправил домашнее задание по курсу {active_course_id_full}, урок {lesson}."
+            try:
+                with open(file_path, "rb") as photo:
+                    await context.bot.send_photo(
+                        chat_id=ADMIN_GROUP_ID,
+                        photo=photo,
+                        caption=admin_message,
+                        reply_markup=reply_markup,
+                    )
+                    logger.info(f"Sent homework to admin group for user {user_id}, lesson {lesson}")
+            except Exception as e:
+                logger.error(f"Ошибка при отправке сообщения админу: {e}")
+                await update.message.reply_text("Произошла ошибка при отправке сообщения админу. Попробуйте позже.")
+                return
 
-            # Отправляем уведомление администратору
-            admin_message = f"Пользователь {user_id} отправил домашнее задание по курсу {active_course_id}, урок {lesson}."
-            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=admin_message)
+        await update.message.reply_text("Домашнее задание отправлено на проверку.")
 
     except Exception as e:
         logger.error(f"Ошибка при обработке домашнего задания: {e}")
-        await update.message.reply_text(
-            "Произошла ошибка при обработке домашнего задания. Попробуйте позже."
-        )
+        await update.message.reply_text("Произошла ошибка при обработке домашнего задания. Попробуйте позже.")
 
 
 # Получение следующего времени урока
-async def calculate_time_to_next_lesson(user_id, active_course_id_full):
+async def calculate_time_to_next_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id, active_course_id_full):
     """Вычисляет, сколько времени осталось до следующего урока."""
     logger.info(f"calculate_time_to_next_lesson")
     # Получаем время последнего урока
@@ -1122,9 +1044,7 @@ async def calculate_time_to_next_lesson(user_id, active_course_id_full):
         return next_lesson_time - datetime.now()
 
     # Преобразуем время последнего урока из базы данных
-    last_submission_time = datetime.strptime(
-        last_submission_data[0], "%Y-%m-%d %H:%M:%S"
-    )
+    last_submission_time = datetime.strptime(last_submission_data[0], "%Y-%m-%d %H:%M:%S")
 
     # Рассчитываем время следующего урока
     next_lesson_time = last_submission_time + timedelta(hours=DEFAULT_LESSON_INTERVAL)
@@ -1133,7 +1053,7 @@ async def calculate_time_to_next_lesson(user_id, active_course_id_full):
     return next_lesson_time - datetime.now()
 
 
-async def save_admin_comment(update: Update, context: CallbackContext):
+async def save_admin_comment(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """
     Сохраняет комментарий админа и обновляет статус ДЗ.
     """
@@ -1167,22 +1087,16 @@ async def save_admin_comment(update: Update, context: CallbackContext):
                 (approval_status, comment, comment, hw_id),
             )  # Сохраняем комментарий
             conn.commit()
-            await update.message.reply_text(
-                f"Комментарий сохранен. Статус ДЗ обновлен: {approval_status}"
-            )
+            await update.message.reply_text(f"Комментарий сохранен. Статус ДЗ обновлен: {approval_status}")
         except Exception as e:
             logger.error(f"Ошибка при сохранении комментария и статуса ДЗ: {e}")
-            await update.message.reply_text(
-                "Произошла ошибка при сохранении комментария."
-            )
+            await update.message.reply_text("Произошла ошибка при сохранении комментария.")
     else:
-        await update.message.reply_text(
-            "Не найден hw_id или статус. Повторите действие."
-        )
+        await update.message.reply_text("Не найден hw_id или статус. Повторите действие.")
 
 
 # отказ * всё хуйня - переделывай
-async def handle_admin_rejection(update: Update, context: CallbackContext):
+async def handle_admin_rejection(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает отклонение ДЗ администратором."""
     query = update.callback_query
     await query.answer()
@@ -1241,13 +1155,11 @@ async def handle_admin_rejection(update: Update, context: CallbackContext):
 
     except Exception as e:
         logger.error(f"Ошибка при отклонении ДЗ: {e}")
-        await query.message.reply_text(
-            "Произошла ошибка при отклонении ДЗ. Попробуйте позже."
-        )
+        await query.message.reply_text("Произошла ошибка при отклонении ДЗ. Попробуйте позже.")
 
 
 # Обрабатывает выбор тарифа
-async def change_tariff(update: Update, context: CallbackContext):
+async def change_tariff(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает выбор тарифа."""
     user_id = update.effective_user.id
     logger.info(f"change_tariff  {user_id} 777 555")
@@ -1264,9 +1176,7 @@ async def change_tariff(update: Update, context: CallbackContext):
         active_course_data = cursor.fetchone()
 
         if not active_course_data or not active_course_data[0]:
-            await update.callback_query.message.reply_text(
-                "У вас не активирован ни один курс."
-            )
+            await update.callback_query.message.reply_text("У вас не активирован ни один курс.")
             return
 
         active_course_id = active_course_data[0]
@@ -1285,27 +1195,19 @@ async def change_tariff(update: Update, context: CallbackContext):
                     callback_data=f"set_tariff|{active_course_id}|admin_check",
                 )
             ],
-            [
-                InlineKeyboardButton(
-                    "Premium", callback_data=f"set_tariff|{active_course_id}|premium"
-                )
-            ],
+            [InlineKeyboardButton("Premium", callback_data=f"set_tariff|{active_course_id}|premium")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await update.callback_query.message.reply_text(
-            "Выберите новый тариф:", reply_markup=reply_markup
-        )
+        await update.callback_query.message.reply_text("Выберите новый тариф:", reply_markup=reply_markup)
 
     except Exception as e:
         logger.error(f"Ошибка при отображении вариантов тарифов: {e}")
-        await update.callback_query.message.reply_text(
-            "Произошла ошибка при отображении вариантов тарифов. Попробуйте позже."
-        )
+        await update.callback_query.message.reply_text("Произошла ошибка при отображении вариантов тарифов. Попробуйте позже.")
 
 
 # Отображает список курсов пользователя
-async def my_courses(update: Update, context: CallbackContext):
+async def my_courses(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отображает список курсов пользователя."""
     user_id = update.effective_user.id
     logger.info(f"my_courses  {user_id}")
@@ -1334,22 +1236,18 @@ async def my_courses(update: Update, context: CallbackContext):
 
     except Exception as e:
         logger.error(f"Ошибка при отображении списка курсов: {e}")
-        await update.callback_query.message.reply_text(
-            "Произошла ошибка при отображении списка курсов. Попробуйте позже."
-        )
+        await update.callback_query.message.reply_text("Произошла ошибка при отображении списка курсов. Попробуйте позже.")
 
 
 # статистика домашек *
-async def show_statistics(update: Update, context: CallbackContext):
+async def show_statistics(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Shows statistics for lessons and homework, considering all users, deviations, and course completion."""
     user_id = update.effective_user.id
     logger.info(f" Show stat: {user_id=}")
 
     try:
         # Get active_course_id from user
-        cursor.execute(
-            "SELECT active_course_id FROM users WHERE user_id = ?", (user_id,)
-        )
+        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
         active_course_data = cursor.fetchone()
 
         if not active_course_data or not active_course_data[0]:
@@ -1391,15 +1289,9 @@ async def show_statistics(update: Update, context: CallbackContext):
         user_average_time = cursor.fetchone()[0] or 0
 
         # Calculate deviation from the average
-        diff_percentage = (
-            ((user_average_time - average_time_all) / average_time_all) * 100
-            if average_time_all
-            else 0
-        )
+        diff_percentage = ((user_average_time - average_time_all) / average_time_all) * 100 if average_time_all else 0
         deviation_text = f"{diff_percentage:.2f}%"
-        logger.info(
-            f"Checking {user_id=} {average_time_all=} {user_average_time=} {diff_percentage=}"
-        )
+        logger.info(f"Checking {user_id=} {average_time_all=} {user_average_time=} {diff_percentage=}")
 
         if diff_percentage < 0:
             deviation_text = f"Faster {abs(diff_percentage):.2f}%."
@@ -1407,7 +1299,7 @@ async def show_statistics(update: Update, context: CallbackContext):
             deviation_text = f"Slower {abs(diff_percentage):.2f}%."
 
         # Get average homework completion time
-        average_homework_time = get_average_homework_time(user_id)
+        average_homework_time = get_average_homework_time(conn, cursor, user_id)
 
         # Build statistics message
         stats_message = f"Statistics for {active_course_id_full}:\n"
@@ -1423,7 +1315,7 @@ async def show_statistics(update: Update, context: CallbackContext):
 
 
 # Getting info about lesson.*
-async def format_progress(user_id, course_id):
+async def format_progress(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id, course_id):
     """Getting info about lesson."""
     # Get progress of course
     cursor.execute(
@@ -1452,9 +1344,7 @@ async def format_progress(user_id, course_id):
         (course_id,),
     )
     lessons_available = [row[0] for row in cursor.fetchall()]
-    lessons_available = [
-        x for x in lessons_available if isinstance(x, int)
-    ]  # Remove from list
+    lessons_available = [x for x in lessons_available if isinstance(x, int)]  # Remove from list
     lessons_available.sort()
 
     # Find what lesson was
@@ -1471,9 +1361,7 @@ async def format_progress(user_id, course_id):
         ),
     )
     lessons_completed = [row[0] for row in cursor.fetchall()]
-    lessons_completed = [
-        x for x in lessons_completed if isinstance(x, int)
-    ]  # Remove from list
+    lessons_completed = [x for x in lessons_completed if isinstance(x, int)]  # Remove from list
     lessons_completed.sort()
 
     # Make report
@@ -1510,7 +1398,7 @@ async def format_progress(user_id, course_id):
 
 
 # "Отображает историю домашних заданий пользователя
-async def hw_history(update: Update, context: CallbackContext):
+async def hw_history(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отображает историю домашних заданий пользователя."""
     user_id = update.effective_user.id
     logger.info(f"hw_history  {user_id}")
@@ -1528,9 +1416,7 @@ async def hw_history(update: Update, context: CallbackContext):
         homeworks_data = cursor.fetchall()
 
         if not homeworks_data:
-            await update.callback_query.message.reply_text(
-                "У вас нет истории домашних заданий."
-            )
+            await update.callback_query.message.reply_text("У вас нет истории домашних заданий.")
             return
 
         # Формируем текстовое сообщение с историей ДЗ
@@ -1542,13 +1428,11 @@ async def hw_history(update: Update, context: CallbackContext):
 
     except Exception as e:
         logger.error(f"Ошибка при отображении истории ДЗ: {e}")
-        await update.callback_query.message.reply_text(
-            "Произошла ошибка при отображении истории домашних заданий. Попробуйте позже."
-        )
+        await update.callback_query.message.reply_text("Произошла ошибка при отображении истории домашних заданий. Попробуйте позже.")
 
 
 async def handle_check_payment(
-    update: Update, context: CallbackContext, tariff_id: str
+    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext, tariff_id: str
 ):
     """Handles the "I Paid" button."""
     query = update.callback_query
@@ -1558,9 +1442,7 @@ async def handle_check_payment(
 
     if not tariff_id:
         logger.error("handle_check_payment: tariff_id is empty.")
-        await query.message.reply_text(
-            "Произошла ошибка: tariff_id не может быть пустым."
-        )
+        await query.message.reply_text("Произошла ошибка: tariff_id не может быть пустым.")
         return
 
     logger.info(f"handle_check_payment: Извлеченный tariff_id: {tariff_id}")
@@ -1573,21 +1455,15 @@ async def handle_check_payment(
             logger.info(f"handle_check_payment: Tariffs data loaded: {len(tariffs)}")
         except FileNotFoundError:
             logger.error(f"Tariff file not found: {TARIFFS_FILE}")
-            await query.message.reply_text(
-                "Tariff file not found. Please try again later."
-            )
+            await query.message.reply_text("Tariff file not found. Please try again later.")
             return
         except json.JSONDecodeError:
             logger.error(f"Error decoding JSON from file: {TARIFFS_FILE}")
-            await query.message.reply_text(
-                "Error decoding tariff data. Please try again later."
-            )
+            await query.message.reply_text("Error decoding tariff data. Please try again later.")
             return
 
         # Find selected tariff
-        selected_tariff = next(
-            (tariff for tariff in tariffs if tariff["id"] == tariff_id), None
-        )
+        selected_tariff = next((tariff for tariff in tariffs if tariff["id"] == tariff_id), None)
 
         if selected_tariff:
             logger.info(f"Handling check payment for tariff: {selected_tariff}")
@@ -1602,15 +1478,11 @@ async def handle_check_payment(
             for admin_id in ADMIN_IDS:  # Ensure ADMIN_IDS is a list of strings
                 try:
                     await context.bot.send_message(chat_id=admin_id, text=message)
-                    logger.info(
-                        f"Sent payment verification request to admin {admin_id}"
-                    )
+                    logger.info(f"Sent payment verification request to admin {admin_id}")
                 except TelegramError as e:
                     logger.error(f"Failed to send message to admin {admin_id}: {e}")
 
-            await query.message.reply_text(
-                "Ваш запрос на проверку оплаты отправлен администратору. Ожидайте подтверждения."
-            )
+            await query.message.reply_text("Ваш запрос на проверку оплаты отправлен администратору. Ожидайте подтверждения.")
 
         else:
             logger.warning(f"Tariff with id {tariff_id} not found.")
@@ -1618,13 +1490,11 @@ async def handle_check_payment(
 
     except Exception as e:
         logger.exception(f"Error handling check payment: {e}")
-        await query.message.reply_text(
-            "Error processing payment verification. Please try again later."
-        )
+        await query.message.reply_text("Error processing payment verification. Please try again later.")
 
 
 # Устанавливает выбранный тариф для пользователя
-async def set_tariff(update: Update, context: CallbackContext):
+async def set_tariff(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Устанавливает выбранный тариф для пользователя."""
     query = update.callback_query
     await query.answer()
@@ -1657,56 +1527,52 @@ async def set_tariff(update: Update, context: CallbackContext):
         conn.commit()
 
         # Отправляем подтверждение пользователю
-        await query.message.reply_text(
-            f"Тариф для курса {course_id} изменен на {tariff}."
-        )
+        await query.message.reply_text(f"Тариф для курса {course_id} изменен на {tariff}.")
 
     except Exception as e:
         logger.error(f"Ошибка при установке тарифа: {e}")
-        await query.message.reply_text(
-            "Произошла ошибка при установке тарифа. Попробуйте позже."
-        )
+        await query.message.reply_text("Произошла ошибка при установке тарифа. Попробуйте позже.")
 
 
-async def show_support(update: Update, context: CallbackContext):
+async def show_support(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отображает информацию о поддержке."""
     logger.info(f" show_support  ")
     await update.message.reply_text("Здесь будет информация о поддержке.")
 
 
 # самопроверка на базовом тарифчике пт 14 марта 17:15
-async def self_approve_homework(update: Update, context: CallbackContext):
-    """Обрабатывает нажатие кнопки самопроверки."""
-    query = update.callback_query
-    logger.info(f" self_approve_homework  ")
-    await query.answer()
-
-    data = query.data.split("_")
-    lesson = int(data[1])
-
+async def self_approve_homework(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
+    """Обрабатывает самопроверку домашнего задания."""
+    user_id = update.effective_user.id
     try:
-        # Обновляем статус домашнего задания на "approved"
+        # Извлекаем hw_id из текста сообщения
+        hw_id = int(context.args[0])
+
+        # Обновляем статус домашнего задания в базе данных
         cursor.execute(
             """
             UPDATE homeworks
-            SET status = 'approved'
-            WHERE user_id = ? AND lesson = ?
+            SET status = 'approved', approval_time = CURRENT_TIMESTAMP
+            WHERE hw_id = ? AND user_id = ?
         """,
-            (update.effective_user.id, lesson),
+            (hw_id, user_id),
         )
         conn.commit()
 
-        # Редактируем сообщение, чтобы убрать кнопку
-        await query.edit_message_text(text="Домашнее задание подтверждено вами.")
+        # Отправляем сообщение об успешной самопроверке
+        await update.message.reply_text("Домашнее задание подтверждено вами.")
+
+    except (IndexError, ValueError):
+        # Обрабатываем ошибки, если не удалось извлечь hw_id
+        await update.message.reply_text("Неверный формат команды. Используйте /self_approve <hw_id>.")
     except Exception as e:
-        logger.error(f"Ошибка при редактировании сообщения: {e}")
-        await query.message.reply_text(
-            "Домашнее задание подтверждено, но не удалось изменить сообщение."
-        )
+        # Обрабатываем другие возможные ошибки
+        logger.error(f"Ошибка при самопроверке домашнего задания: {e}")
+        await update.message.reply_text("Произошла ошибка при самопроверке домашнего задания. Попробуйте позже.")
 
 
 # проверка админом на базовом тарифчике пт 14 марта 17:15
-async def approve_homework(update: Update, context: CallbackContext):
+async def approve_homework(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Подтверждает домашнее задание администратором."""
     query = update.callback_query
     await query.answer()
@@ -1728,21 +1594,15 @@ async def approve_homework(update: Update, context: CallbackContext):
         conn.commit()
 
         # Уведомляем пользователя
-        await context.bot.send_message(
-            chat_id=user_id, text=f"Домашнее задание по уроку {lesson} принято!"
-        )
-        await query.edit_message_text(
-            text="Домашнее задание подтверждено администратором."
-        )
+        await context.bot.send_message(chat_id=user_id, text=f"Домашнее задание по уроку {lesson} принято!")
+        await query.edit_message_text(text="Домашнее задание подтверждено администратором.")
     except Exception as e:
         logger.error(f"Ошибка при подтверждении домашнего задания: {e}")
-        await query.message.reply_text(
-            "Произошла ошибка при подтверждении домашнего задания."
-        )
+        await query.message.reply_text("Произошла ошибка при подтверждении домашнего задания.")
 
 
 async def handle_approve_payment(
-    update: Update, context: CallbackContext, user_id: str, tariff_id: str
+    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext, user_id: str, tariff_id: str
 ):
     """Handles the "Approve Payment" button."""
     query = update.callback_query
@@ -1754,9 +1614,7 @@ async def handle_approve_payment(
             tariffs = json.load(f)
 
         # Find selected tariff
-        selected_tariff = next(
-            (tariff for tariff in tariffs if tariff["id"] == tariff_id), None
-        )
+        selected_tariff = next((tariff for tariff in tariffs if tariff["id"] == tariff_id), None)
 
         if selected_tariff:
             logger.info(f"Handling approve payment for tariff: {selected_tariff}")
@@ -1778,13 +1636,11 @@ async def handle_approve_payment(
             await query.message.reply_text("Выбранный тариф не найден.")
     except Exception as e:
         logger.error(f"Error handling approve payment: {e}")
-        await query.message.reply_text(
-            "Произошла ошибка при одобрении оплаты. Попробуйте позже."
-        )
+        await query.message.reply_text("Произошла ошибка при одобрении оплаты. Попробуйте позже.")
 
 
 async def handle_decline_payment(
-    update: Update, context: CallbackContext, user_id: str, tariff_id: str
+    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext, user_id: str, tariff_id: str
 ):
     """Handles the "Decline Payment" button."""
     query = update.callback_query
@@ -1796,9 +1652,7 @@ async def handle_decline_payment(
             tariffs = json.load(f)
 
         # Find selected tariff
-        selected_tariff = next(
-            (tariff for tariff in tariffs if tariff["id"] == tariff_id), None
-        )
+        selected_tariff = next((tariff for tariff in tariffs if tariff["id"] == tariff_id), None)
 
         if selected_tariff:
             logger.info(f"Handling decline payment for tariff: {selected_tariff}")
@@ -1820,13 +1674,11 @@ async def handle_decline_payment(
             await query.message.reply_text("Выбранный тариф не найден.")
     except Exception as e:
         logger.error(f"Error handling decline payment: {e}")
-        await query.message.reply_text(
-            "Произошла ошибка при отклонении оплаты. Попробуйте позже."
-        )
+        await query.message.reply_text("Произошла ошибка при отклонении оплаты. Попробуйте позже.")
 
 
 # Отображает настройки курса *
-async def show_course_settings(update: Update, context: CallbackContext):
+async def show_course_settings(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отображает настройки курса."""
     user_id = update.effective_user.id
     logger.error(f"show_course_settings {user_id}")
@@ -1854,57 +1706,46 @@ async def show_course_settings(update: Update, context: CallbackContext):
         elif update.callback_query:
             await update.callback_query.message.reply_text(text)
         else:
-            logger.error(
-                "Не удалось определить источник вызова функции show_course_settings"
-            )
+            logger.error("Не удалось определить источник вызова функции show_course_settings")
             return
 
     except Exception as e:
-        logger.error(
-            f"Ошибка при отображении настроек курса для пользователя {user_id}: {e}"
-        )
+        logger.error(f"Ошибка при отображении настроек курса для пользователя {user_id}: {e}")
         # Проверяем, откуда была вызвана функция
         if update.message:
-            await update.message.reply_text(
-                "Произошла ошибка при загрузке настроек. Попробуйте позже."
-            )
+            await update.message.reply_text("Произошла ошибка при загрузке настроек. Попробуйте позже.")
         elif update.callback_query:
-            await update.callback_query.message.reply_text(
-                "Произошла ошибка при загрузке настроек. Попробуйте позже."
-            )
+            await update.callback_query.message.reply_text("Произошла ошибка при загрузке настроек. Попробуйте позже.")
         else:
-            logger.error(
-                "Не удалось определить источник вызова функции show_course_settings при ошибке"
-            )
+            logger.error("Не удалось определить источник вызова функции show_course_settings при ошибке")
             return
 
 
 # Отображает тарифы и акции. *
-async def show_tariffs(update: Update, context: CallbackContext):
-    """показывает акции и бонусы."""
+async def show_tariffs(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
+    """Отображает доступные тарифы и бонусы."""
+    user_id = update.effective_user.id
     logger.info(f"show_tariffs --------------------- 222")
     try:
-        query = update.callback_query
+        query = update.callback_query  # Получаем CallbackQuery
         await query.answer()
 
         # Загружаем тарифы из файла
         try:
             with open(TARIFFS_FILE, "r", encoding="utf-8") as f:
-                tariffs = json.load(f)
-                logger.info(
-                    f"show_tariffs  len(tariffs)={len(tariffs)}-------------------- 222"
-                )
+                tariffs_data = json.load(f)
+
         except FileNotFoundError:
             logger.error(f"File not found: {TARIFFS_FILE}")
             await context.bot.send_message(
-                chat_id=query.message.chat_id,
+                chat_id=query.message.chat_id,  # Используем query.message.chat_id
                 text="Cannot display tariffs. Please try later.",
             )
             return
         except json.JSONDecodeError:
             logger.error(f"Ошибка чтения JSON файла: {TARIFFS_FILE}")
             await context.bot.send_message(
-                chat_id=query.message.chat_id,
+                chat_id=query.message.chat_id,  # Используем query.message.chat_id
                 text="Cannot display tariffs. Please try later.",
             )
             return
@@ -1912,51 +1753,41 @@ async def show_tariffs(update: Update, context: CallbackContext):
         # Формируем кнопки для каждого тарифа
         keyboard = []
         logger.info(f"show_tariffs3 ------------------- 333")
-        for tariff in tariffs:
+        for tariff in tariffs_data:  # Исправлено: tariffs -> tariffs_data
             if "title" not in tariff:
-                logger.error(
-                    f"Tariff missing 'title' key: {tariff.get('id', 'Unknown')}"
-                )
+                logger.error(f"Tariff missing 'title' key: {tariff.get('id', 'Unknown')}")
                 continue
             callback_data = f"tariff_{tariff['id']}"  # Передаем полный ID тарифа
-            keyboard.append(
-                [InlineKeyboardButton(tariff["title"], callback_data=callback_data)]
-            )
+            keyboard.append([InlineKeyboardButton(tariff["title"], callback_data=callback_data)])
 
         keyboard.append([InlineKeyboardButton("Назад", callback_data="menu_back")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         logger.info(f"show_tariffs4  готово ------------------- 333")
 
         await context.bot.send_message(
-            chat_id=query.message.chat_id,
+            chat_id=query.message.chat_id,  # Используем query.message.chat_id
             text="Вот доступные тарифы и бонусы:",
             reply_markup=reply_markup,
         )
     except Exception as e:
         logger.error(f"Error during show tariffs: {e}")
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id, text="Something went wrong."
-        )
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Something went wrong.")
 
 
 # "Показывает текст урока по запросу."*
-async def show_lesson(update: Update, context: CallbackContext):
+async def show_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отправляет все материалы текущего урока, включая текст и файлы, а также напоминает о ДЗ."""
     user_id = update.effective_user.id
     logger.info(f" show_lesson {user_id} - Current state")
 
     try:
         # Получаем active_course_id из users
-        cursor.execute(
-            "SELECT active_course_id FROM users WHERE user_id = ?", (user_id,)
-        )
+        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
         active_course_data = cursor.fetchone()
 
         if not active_course_data or not active_course_data[0]:
             if update.callback_query:
-                await update.callback_query.message.reply_text(
-                    "Активируйте курс через кодовое слово."
-                )
+                await update.callback_query.message.reply_text("Активируйте курс через кодовое слово.")
             else:
                 await update.message.reply_text("Активируйте курс через кодовое слово.")
             return
@@ -1985,7 +1816,7 @@ async def show_lesson(update: Update, context: CallbackContext):
             lesson = progress_data[0]
 
         # 1. Отправляем текст урока
-        lesson_text = get_lesson_text(user_id, lesson, active_course_id)
+        lesson_text = get_lesson_text(lesson, active_course_id)
         if lesson_text:
             await update.callback_query.message.reply_text(lesson_text)
         else:
@@ -2061,76 +1892,54 @@ async def show_lesson(update: Update, context: CallbackContext):
                                     caption=f"Документ к уроку {lesson}",
                                 )
                     else:
-                        logger.warning(
-                            f"Неизвестный тип файла: {file_type}, {file_path}"
-                        )
+                        logger.warning(f"Неизвестный тип файла: {file_type}, {file_path}")
 
                 except FileNotFoundError as e:
                     logger.error(f"Файл не найден: {file_path} - {e}")
-                    await update.callback_query.message.reply_text(
-                        f"Файл {os.path.basename(file_path)} не найден."
-                    )
+                    await update.callback_query.message.reply_text(f"Файл {os.path.basename(file_path)} не найден.")
                 except TelegramError as e:
                     logger.error(f"Ошибка при отправке файла {file_path}: {e}")
                     await update.callback_query.message.reply_text(
                         f"Произошла ошибка при отправке файла {os.path.basename(file_path)}."
                     )
                 except Exception as e:
-                    logger.error(
-                        f"Неожиданная ошибка при отправке файла {file_path}: {e}"
-                    )
+                    logger.error(f"Неожиданная ошибка при отправке файла {file_path}: {e}")
                     await update.callback_query.message.reply_text(
                         f"Произошла непредвиденная ошибка при отправке файла {os.path.basename(file_path)}."
                     )
 
             # После отправки последнего файла показываем меню и напоминаем о ДЗ
-            await show_main_menu(update, context)
+            await show_main_menu(conn, cursor, update, context)
 
             # Добавляем напоминание о ДЗ
-            homework_status = await get_homework_status_text(
-                user_id, active_course_id_full
-            )
+            homework_status = await get_homework_status_text(conn, cursor, user_id, active_course_id_full)
             if update.callback_query:
-                await update.callback_query.message.reply_text(
-                    f"Напоминаем: {homework_status}"
-                )
+                await update.callback_query.message.reply_text(f"Напоминаем: {homework_status}")
             else:
                 await update.message.reply_text(f"Напоминаем: {homework_status}")
 
         else:
             if update.callback_query:
-                await update.callback_query.message.reply_text(
-                    "Файлы к этому уроку не найдены."
-                )
+                await update.callback_query.message.reply_text("Файлы к этому уроку не найдены.")
             else:
                 await update.message.reply_text("Файлы к этому уроку не найдены.")
 
-            await show_main_menu(
-                update, context
-            )  # Показываем меню, даже если файлов нет
-            homework_status = await get_homework_status_text(
-                user_id, active_course_id_full
-            )
+            await show_main_menu(conn, cursor, update, context)  # Показываем меню, даже если файлов нет
+            homework_status = await get_homework_status_text(conn, cursor, user_id, active_course_id_full)
             if update.callback_query:
-                await update.callback_query.message.reply_text(
-                    f"Напоминаем: {homework_status}"
-                )
+                await update.callback_query.message.reply_text(f"Напоминаем: {homework_status}")
             else:
                 await update.message.reply_text(f"Напоминаем: {homework_status}")
 
     except Exception as e:  # это часть show_lesson
         logger.error(f"Ошибка при получении материалов урока: {e}")
         if update.callback_query:
-            await update.callback_query.message.reply_text(
-                "Ошибка при получении материалов урока. Попробуйте позже."
-            )
+            await update.callback_query.message.reply_text("Ошибка при получении материалов урока. Попробуйте позже.")
         else:
-            await update.message.reply_text(
-                "Ошибка при получении материалов урока. Попробуйте позже."
-            )
+            await update.message.reply_text("Ошибка при получении материалов урока. Попробуйте позже.")
 
 
-# Функция для получения файлов урока (обновленная версия)
+# Функция для получения файлов урока ненадо
 def get_lesson_files(user_id, lesson_number, course_id):
     """Получает список файлов урока (аудио, видео, изображения) с задержками."""
     logger.info(f"  get_lesson_files {user_id} - {lesson_number=}")
@@ -2174,7 +1983,7 @@ def get_lesson_files(user_id, lesson_number, course_id):
         return files
 
     except FileNotFoundError:
-        logger.error(f"Папка с файлами урока не найдена: {lesson_dir}")
+        logger.error(f"Папка с файлами урока не найдена: ")
         return []
     except Exception as e:
         logger.error(f"Ошибка при получении файлов урока: {e}")
@@ -2182,7 +1991,7 @@ def get_lesson_files(user_id, lesson_number, course_id):
 
 
 # предварительные задания
-async def send_preliminary_material(update: Update, context: CallbackContext):
+async def send_preliminary_material(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отправляет предварительные материалы для следующего урока."""
     query = update.callback_query
     await query.answer()
@@ -2215,9 +2024,7 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
 
     try:
         if not progress_data:
-            await query.message.reply_text(
-                "Прогресс курса не найден. Пожалуйста, начните курс сначала."
-            )
+            await query.message.reply_text("Прогресс курса не найден. Пожалуйста, начните курс сначала.")
             return
 
         lesson = progress_data[0]
@@ -2227,9 +2034,7 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
         materials = get_preliminary_materials(active_course_id, next_lesson)
 
         if not materials:
-            await query.message.reply_text(
-                "Предварительные материалы для следующего урока отсутствуют."
-            )
+            await query.message.reply_text("Предварительные материалы для следующего урока отсутствуют.")
             return
 
         # Отправляем материалы
@@ -2249,33 +2054,21 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
                         await context.bot.send_audio(chat_id=user_id, audio=audio_file)
                 else:
                     with open(material_path, "rb") as document_file:
-                        await context.bot.send_document(
-                            chat_id=user_id, document=document_file
-                        )
+                        await context.bot.send_document(chat_id=user_id, document=document_file)
             except FileNotFoundError:
                 logger.error(f"Файл не найден: {material_path}")
                 await query.message.reply_text(f"Файл {material_file} не найден.")
             except TelegramError as e:
                 logger.error(f"Ошибка при отправке файла {material_file}: {e}")
-                await query.message.reply_text(
-                    f"Произошла ошибка при отправке файла {material_file}."
-                )
+                await query.message.reply_text(f"Произошла ошибка при отправке файла {material_file}.")
             except Exception as e:
-                logger.error(
-                    f"Неожиданная ошибка при отправке файла {material_file}: {e}"
-                )
-                await query.message.reply_text(
-                    f"Произошла непредвиденная ошибка при отправке файла {material_file}."
-                )
+                logger.error(f"Неожиданная ошибка при отправке файла {material_file}: {e}")
+                await query.message.reply_text(f"Произошла непредвиденная ошибка при отправке файла {material_file}.")
 
-        await query.message.reply_text(
-            "Все предварительные материалы для следующего урока отправлены."
-        )
+        await query.message.reply_text("Все предварительные материалы для следующего урока отправлены.")
 
     except FileNotFoundError:
-        logger.error(
-            f"Папка с файлами урока не найдена: {f'courses/{active_course_id}/{material_file}'}"
-        )
+        logger.error(f"Папка с файлами урока не найдена: {f'courses/{active_course_id}/{material_file}'}")
         return []
     except Exception as e:
         logger.error(f"Ошибка при получении файлов урока: {e}")
@@ -2283,7 +2076,7 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
 
 
 async def handle_go_to_payment(
-    update: Update, context: CallbackContext, tariff_id: str
+    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext, tariff_id: str
 ):
     """Handles the "Go to Payment" button."""
     query = update.callback_query
@@ -2295,9 +2088,7 @@ async def handle_go_to_payment(
             tariffs = json.load(f)
 
         # Find selected tariff
-        selected_tariff = next(
-            (tariff for tariff in tariffs if tariff["id"] == tariff_id), None
-        )
+        selected_tariff = next((tariff for tariff in tariffs if tariff["id"] == tariff_id), None)
 
         if selected_tariff:
             logger.info(f"Handling go to payment for tariff: {selected_tariff}")
@@ -2310,9 +2101,7 @@ async def handle_go_to_payment(
 
             if not phone_number or not name or not payment_message or not amount:
                 logger.error("Missing payment information.")
-                await query.message.reply_text(
-                    "Произошла ошибка. Не удалось получить информацию об оплате."
-                )
+                await query.message.reply_text("Произошла ошибка. Не удалось получить информацию об оплате.")
                 return
 
             # Format payment message
@@ -2320,11 +2109,7 @@ async def handle_go_to_payment(
 
             # Create keyboard
             keyboard = [
-                [
-                    InlineKeyboardButton(
-                        "Я оплатил", callback_data=f"check_payment_{tariff_id}"
-                    )
-                ],
+                [InlineKeyboardButton("Я оплатил", callback_data=f"check_payment_{tariff_id}")],
                 [InlineKeyboardButton("Назад к тарифам", callback_data="tariffs")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2339,12 +2124,12 @@ async def handle_go_to_payment(
             await query.message.reply_text("Выбранный тариф не найден.")
     except Exception as e:
         logger.error(f"Error handling go to payment: {e}")
-        await query.message.reply_text(
-            "Произошла ошибка при переходе к оплате. Попробуйте позже."
-        )
+        await query.message.reply_text("Произошла ошибка при переходе к оплате. Попробуйте позже.")
 
 
-async def handle_buy_tariff(update: Update, context: CallbackContext, tariff_id: str):
+async def handle_buy_tariff(
+    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext, tariff_id: str
+):
     """Обрабатывает нажатие на кнопку 'Купить'."""
     query = update.callback_query
     user_id = update.effective_user.id
@@ -2359,31 +2144,19 @@ async def handle_buy_tariff(update: Update, context: CallbackContext, tariff_id:
             logger.info(f"handle_buy_tariff: Tariffs data loaded from {TARIFFS_FILE}")
         except FileNotFoundError:
             logger.error(f"handle_buy_tariff: Файл {TARIFFS_FILE} не найден.")
-            await query.message.reply_text(
-                "Произошла ошибка: файл с тарифами не найден."
-            )
+            await query.message.reply_text("Произошла ошибка: файл с тарифами не найден.")
             return
         except json.JSONDecodeError as e:
-            logger.error(
-                f"handle_buy_tariff: Ошибка при чтении JSON из файла {TARIFFS_FILE}: {e}"
-            )
-            await query.message.reply_text(
-                "Произошла ошибка: не удалось прочитать данные о тарифах."
-            )
+            logger.error(f"handle_buy_tariff: Ошибка при чтении JSON из файла {TARIFFS_FILE}: {e}")
+            await query.message.reply_text("Произошла ошибка: не удалось прочитать данные о тарифах.")
             return
         except Exception as e:
-            logger.error(
-                f"handle_buy_tariff: Непредвиденная ошибка при загрузке тарифов: {e}"
-            )
-            await query.message.reply_text(
-                "Произошла непредвиденная ошибка. Попробуйте позже."
-            )
+            logger.error(f"handle_buy_tariff: Непредвиденная ошибка при загрузке тарифов: {e}")
+            await query.message.reply_text("Произошла непредвиденная ошибка. Попробуйте позже.")
             return
 
         # Ищем выбранный тариф
-        selected_tariff = next(
-            (tariff for tariff in tariffs if tariff["id"] == tariff_id), None
-        )
+        selected_tariff = next((tariff for tariff in tariffs if tariff["id"] == tariff_id), None)
 
         if selected_tariff:
             logger.info(f"handle_buy_tariff: Найден тариф: {selected_tariff}")
@@ -2392,12 +2165,8 @@ async def handle_buy_tariff(update: Update, context: CallbackContext, tariff_id:
             payment_info = load_payment_info(PAYMENT_INFO_FILE)
 
             if not payment_info:
-                logger.error(
-                    "handle_buy_tariff: Не удалось загрузить информацию об оплате."
-                )
-                await query.message.reply_text(
-                    "Произошла ошибка: не удалось получить информацию об оплате."
-                )
+                logger.error("handle_buy_tariff: Не удалось загрузить информацию об оплате.")
+                await query.message.reply_text("Произошла ошибка: не удалось получить информацию об оплате.")
                 return
 
             phone_number = payment_info.get("phone_number")
@@ -2406,12 +2175,8 @@ async def handle_buy_tariff(update: Update, context: CallbackContext, tariff_id:
             amount = selected_tariff.get("price")
 
             if not all([phone_number, name, payment_message, amount]):
-                logger.error(
-                    "handle_buy_tariff: Отсутствует необходимая информация для оплаты."
-                )
-                await query.message.reply_text(
-                    "Произошла ошибка: отсутствует необходимая информация для оплаты."
-                )
+                logger.error("handle_buy_tariff: Отсутствует необходимая информация для оплаты.")
+                await query.message.reply_text("Произошла ошибка: отсутствует необходимая информация для оплаты.")
                 return
 
             # Форматируем сообщение об оплате
@@ -2419,11 +2184,7 @@ async def handle_buy_tariff(update: Update, context: CallbackContext, tariff_id:
 
             # Создаем кнопки
             keyboard = [
-                [
-                    InlineKeyboardButton(
-                        "Я оплатил", callback_data=f"check_payment_{tariff_id}"
-                    )
-                ],
+                [InlineKeyboardButton("Я оплатил", callback_data=f"check_payment_{tariff_id}")],
                 [InlineKeyboardButton("Назад к тарифам", callback_data="tariffs")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2437,28 +2198,21 @@ async def handle_buy_tariff(update: Update, context: CallbackContext, tariff_id:
                 f"После оплаты нажмите кнопку 'Я оплатил'."
             )
 
-            await query.edit_message_text(
-                payment_info_message, reply_markup=reply_markup
-            )
-            logger.info(
-                f"handle_buy_tariff: Сообщение об оплате отправлено пользователю {user_id}"
-            )
+            await query.edit_message_text(payment_info_message, reply_markup=reply_markup)
+            logger.info(f"handle_buy_tariff: Сообщение об оплате отправлено пользователю {user_id}")
         else:
             logger.warning(f"handle_buy_tariff: Тариф с id '{tariff_id}' не найден.")
-            await query.message.reply_text(
-                "Выбранный тариф не найден. Пожалуйста, выберите тариф снова."
-            )
+            await query.message.reply_text("Выбранный тариф не найден. Пожалуйста, выберите тариф снова.")
 
     except Exception as e:
-        logger.exception(
-            f"handle_buy_tariff: Непредвиденная ошибка при обработке покупки: {e}"
-        )
-        await query.message.reply_text(
-            "Произошла непредвиденная ошибка при обработке покупки. Попробуйте позже."
-        )
+        logger.exception(f"handle_buy_tariff: Непредвиденная ошибка при обработке покупки: {e}")
+        await query.message.reply_text("Произошла непредвиденная ошибка при обработке покупки. Попробуйте позже.")
 
 
-async def get_gallery_count():
+async def get_gallery_count(
+    conn: sqlite3.Connection,
+    cursor: sqlite3.Cursor,
+):
     """
     Считает количество работ в галерее (реализация зависит от способа хранения галереи).
     """
@@ -2468,13 +2222,13 @@ async def get_gallery_count():
 
 
 # галерея
-async def show_gallery(update: Update, context: CallbackContext):
+async def show_gallery(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     logger.info(f"show_gallery -------------<")
-    await get_random_homework(update, context)
+    await get_random_homework(conn, cursor, update, context)
 
 
 # галерейка
-async def get_random_homework(update: Update, context: CallbackContext):
+async def get_random_homework(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     query = update.callback_query
     if query:
         await query.answer()
@@ -2497,15 +2251,13 @@ async def get_random_homework(update: Update, context: CallbackContext):
     if not hw:
         # Если работ нет, показываем сообщение и возвращаем в основное меню
         if query:
-            await query.edit_message_text(
-                "В галерее пока нет работ 😞\nХотите стать первым?"
-            )
+            await query.edit_message_text("В галерее пока нет работ 😞\nХотите стать первым?")
         else:
             await context.bot.send_message(
                 chat_id=user_id,
                 text="В галерее пока нет работ 😞\nХотите стать первым?",
             )
-        await show_main_menu(update, context)  # Возвращаем в основное меню
+        await show_main_menu(conn, cursor, update, context)  # Возвращаем в основное меню
         return
 
     hw_id, author_id, course_type, lesson, file_id = hw
@@ -2571,19 +2323,17 @@ async def get_random_homework(update: Update, context: CallbackContext):
 
 # Обрабатывает нажатия на кнопки все
 button_handlers = {
-    "get_current_lesson": get_current_lesson,
+    "get_current_lesson": lambda update, context: get_current_lesson(update, context),
     "gallery": show_gallery,
     "gallery_next": lambda update, context: get_random_homework(update, context),
-    "menu_back": show_main_menu,
-    "support": show_support,
-    "tariffs": show_tariffs,
-    "course_settings": show_course_settings,
-    "statistics": show_statistics,
-    "preliminary_tasks": send_preliminary_material,
+    "menu_back": lambda update, context: show_main_menu(update, context),
+    "support": lambda update, context: show_support(update, context),
+    "tariffs": lambda update, context: show_tariffs(update.callback_query.message.chat_id),
+    "course_settings": lambda update, context: show_course_settings(update.callback_query.message.chat_id),
 }
 
 
-async def button_handler(update: Update, context: CallbackContext):
+async def button_handler(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Handles button presses."""
     query = update.callback_query
     data = query.data
@@ -2602,7 +2352,7 @@ async def button_handler(update: Update, context: CallbackContext):
             # Handle "Buy" button
             tariff_id = data.split("_", 2)[2]
             logger.info(f" handler для handle_buy_tariff {tariff_id}")
-            await handle_buy_tariff(update, context, tariff_id)
+            await handle_buy_tariff(conn, cursor, update, context, tariff_id)
         elif data.startswith("go_to_payment_"):
             # Handle "Go to Payment" button
             tariff_id = data.split("_", 2)[2]
@@ -2615,9 +2365,7 @@ async def button_handler(update: Update, context: CallbackContext):
                 tariff_id = data.split("_", 2)[1]  # Извлекаем tariff_id правильно
                 logger.info(f" handler для handle_check_payment {tariff_id}")
             except IndexError:
-                logger.error(
-                    f"Не удалось извлечь tariff_id из data: {data} ====== 8888"
-                )
+                logger.error(f"Не удалось извлечь tariff_id из data: {data} ====== 8888")
                 await query.message.reply_text("Произошла ошибка. Попробуйте позже.")
                 return
             await handle_check_payment(update, context, tariff_id)
@@ -2634,7 +2382,7 @@ async def button_handler(update: Update, context: CallbackContext):
 
 # выбор товара в магазине *
 async def handle_tariff_selection(
-    update: Update, context: CallbackContext, tariff_id: str
+    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext, tariff_id: str
 ):
     """Handles the selection of a tariff."""
     query = update.callback_query
@@ -2646,9 +2394,7 @@ async def handle_tariff_selection(
             tariffs = json.load(f)
 
         # Find selected tariff
-        selected_tariff = next(
-            (tariff for tariff in tariffs if tariff["id"] == tariff_id), None
-        )
+        selected_tariff = next((tariff for tariff in tariffs if tariff["id"] == tariff_id), None)
 
         if selected_tariff:
             logger.info(f"Selected tariff: {len(selected_tariff)}")
@@ -2662,11 +2408,7 @@ async def handle_tariff_selection(
 
             # Create buttons for "Buy" and "Back to Tariffs"
             keyboard = [
-                [
-                    InlineKeyboardButton(
-                        "Купить", callback_data=f"buy_tariff_{tariff_id}"
-                    )
-                ],
+                [InlineKeyboardButton("Купить", callback_data=f"buy_tariff_{tariff_id}")],
                 [InlineKeyboardButton("Назад к тарифам", callback_data="tariffs")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2678,13 +2420,11 @@ async def handle_tariff_selection(
             await query.message.reply_text("Выбранный 2 тариф не найден.")
     except Exception as e:
         logger.error(f"Error handling tariff selection: {e}")
-        await query.message.reply_text(
-            "Произошла ошибка при выборе тарифа. Попробуйте позже."
-        )
+        await query.message.reply_text("Произошла ошибка при выборе тарифа. Попробуйте позже.")
 
 
 # Обрабатывает текстовые сообщения. *
-async def handle_text_message(update: Update, context: CallbackContext):
+async def handle_text_message(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает текстовые сообщения."""
     user_id = update.effective_user.id
     text = update.message.text.lower()  # Приводим текст к нижнему регистру
@@ -2693,33 +2433,29 @@ async def handle_text_message(update: Update, context: CallbackContext):
     if context.user_data.get("waiting_for_code"):
         return  # Если ждем кодовое слово, игнорируем сообщение
     if "предварительные" in text or "пм" in text:
-        await send_preliminary_material(update, context)
+        await send_preliminary_material(conn, cursor, update, context)
     if "текущий урок" in text or "ту" in text:
         await get_current_lesson(update, context)
     elif "галерея дз" in text or "гдз" in text:
-        await show_gallery(update, context)
+        await show_gallery(conn, cursor, update, context)
     elif "тарифы" in text or "ТБ" in text:
         logger.info(f" тарифы 1652 строка ")
-        await show_tariffs(update, context)
+        await show_tariffs(conn, cursor, update, context)
     elif "поддержка" in text or "пд" in text:
-        await start_support_request(
-            update, context
-        )  # Вызываем функцию для начала запроса в поддержку
+        await start_support_request(conn, cursor, update, context)  # Вызываем функцию для начала запроса в поддержку
     else:
         await update.message.reply_text("Я не понимаю эту команду.")
 
 
 # Отправляет запрос в поддержку администратору. *
-async def start_support_request(update: Update, context: CallbackContext):
+async def start_support_request(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Начинает запрос в поддержку."""
-    await update.message.reply_text(
-        "Пожалуйста, опишите вашу проблему или вопрос. Вы также можете прикрепить фотографию."
-    )
+    await update.message.reply_text("Пожалуйста, опишите вашу проблему или вопрос. Вы также можете прикрепить фотографию.")
     return WAIT_FOR_SUPPORT_TEXT
 
 
 # Отправляет запрос в поддержку администратору. *
-async def get_support_text(update: Update, context: CallbackContext):
+async def get_support_text(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Получает текст запроса в поддержку."""
     user_id = update.effective_user.id
     text = update.message.text
@@ -2740,25 +2476,19 @@ async def get_support_text(update: Update, context: CallbackContext):
 
 
 # Отправляет запрос в поддержку администратору. *
-async def send_support_request_to_admin(update: Update, context: CallbackContext):
+async def send_support_request_to_admin(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отправляет запрос в поддержку администратору."""
     user_id = update.effective_user.id
     support_text = context.user_data.get("support_text", "No text provided")
     support_photo = context.user_data.get("support_photo")
-    logger.info(
-        f"send_support_request_to_admin {user_id}  {support_text}  {support_photo}"
-    )
+    logger.info(f"send_support_request_to_admin {user_id}  {support_text}  {support_photo}")
     try:
         # Формируем сообщение для администратора
-        caption = (
-            f"Новый запрос в поддержку!\nUser ID: {user_id}\nТекст: {support_text}"
-        )
+        caption = f"Новый запрос в поддержку!\nUser ID: {user_id}\nТекст: {support_text}"
 
         # Отправляем сообщение администратору
         if support_photo:
-            await context.bot.send_photo(
-                chat_id=ADMIN_GROUP_ID, photo=support_photo, caption=caption
-            )
+            await context.bot.send_photo(chat_id=ADMIN_GROUP_ID, photo=support_photo, caption=caption)
         else:
             await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=caption)
 
@@ -2769,19 +2499,15 @@ async def send_support_request_to_admin(update: Update, context: CallbackContext
         )
         conn.commit()
 
-        await update.message.reply_text(
-            "Ваш запрос в поддержку отправлен. Ожидайте ответа."
-        )
+        await update.message.reply_text("Ваш запрос в поддержку отправлен. Ожидайте ответа.")
 
     except Exception as e:
         logger.error(f"Ошибка при отправке запроса в поддержку администратору: {e}")
-        await update.message.reply_text(
-            "Произошла ошибка при отправке запроса. Попробуйте позже."
-        )
+        await update.message.reply_text("Произошла ошибка при отправке запроса. Попробуйте позже.")
 
 
 # Сохраняет имя пользователя и запрашивает кодовое слово *
-async def handle_name(update: Update, context: CallbackContext):
+async def handle_name(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Сохраняет имя пользователя и запрашивает кодовое слово."""
     user_id = update.effective_user.id
     full_name = update.message.text.strip()
@@ -2798,266 +2524,11 @@ async def handle_name(update: Update, context: CallbackContext):
     # Устанавливаем состояние ожидания кодового слова
     context.user_data["waiting_for_code"] = True
 
-    await update.message.reply_text(
-        f"Отлично, {full_name}! Теперь введите кодовое слово для активации курса."
-    )
+    await update.message.reply_text(f"Отлично, {full_name}! Теперь введите кодовое слово для активации курса.")
     return WAIT_FOR_CODE
 
 
-# прислали домашку и заверте... пт 14 марта 17:15
-async def handle_document(update: Update, context: CallbackContext):
-    """Handles document messages (homework submissions)."""
-    user_id = update.effective_user.id
-    logger.info(f" handle_document  ")
-
-    # Проверяем, что это изображение
-    if not update.message.document.mime_type.startswith("image/"):
-        await update.message.reply_text(
-            "⚠️ Отправьте, пожалуйста, картинку или фотографию."
-        )
-        return
-
-    # Получаем активный курс и прогресс пользователя
-    # cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
-    # active_course_data = cursor.fetchone()
-    user_data = get_user_data(user_id)
-    active_course_data = user_data["active_course_id"] if user_data else None
-
-    if not active_course_data or not active_course_data[0]:
-        await update.message.reply_text("Пожалуйста, активируйте курс.")
-        return
-
-    active_course_id_full = active_course_data[0]
-    cursor.execute(
-        """
-        SELECT progress, tariff
-        FROM user_courses
-        WHERE user_id = ? AND course_id = ?
-    """,
-        (user_id, active_course_id_full),
-    )
-    progress_data = cursor.fetchone()
-
-    if not progress_data:
-        await update.message.reply_text("Не найден прогресс курса.")
-        return
-
-    lesson, tariff = progress_data
-
-    try:
-        # Получаем информацию о файле
-        photo_file = await update.message.document.get_file()
-        file_path = f"homeworks/{user_id}_{photo_file.file_unique_id}.jpg"
-        await photo_file.download_to_drive(file_path)
-
-        # Сохраняем информацию о домашнем задании в базе данных
-        cursor.execute(
-            """
-            INSERT INTO homeworks (user_id, course_id, lesson, file_path, status)
-            VALUES (?, ?, ?, ?, ?)
-        """,
-            (user_id, active_course_id_full, lesson, file_path, "pending"),
-        )
-        conn.commit()
-
-        # Получаем hw_id только что добавленной записи
-        cursor.execute(
-            """
-            SELECT hw_id FROM homeworks 
-            WHERE user_id = ? AND course_id = ? AND lesson = ?
-            ORDER BY hw_id DESC LIMIT 1
-        """,
-            (user_id, active_course_id_full, lesson),
-        )
-        hw_id_data = cursor.fetchone()
-        hw_id = hw_id_data[0] if hw_id_data else None
-
-        if hw_id is None:
-            logger.error(
-                f"Не удалось получить hw_id для user_id={user_id}, course_id={active_course_id_full}, lesson={lesson}"
-            )
-            await update.message.reply_text(
-                "Произошла ошибка при обработке домашнего задания. Попробуйте позже."
-            )
-            return
-
-        # Если тариф с самопроверкой
-        if tariff == "self_check":
-            # Отправка кнопки для самопроверки пользователю
-            keyboard = [
-                [
-                    InlineKeyboardButton(
-                        "✅ Принять домашнее задание",
-                        callback_data=f"self_approve_{hw_id}",
-                    )
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
-                f"Домашнее задание по уроку {lesson} отправлено. Вы можете самостоятельно подтвердить выполнение.",
-                reply_markup=reply_markup,
-            )
-        else:
-            # Отправка домашнего задания админу для проверки
-            keyboard = [
-                [
-                    InlineKeyboardButton(
-                        "✅ Принять", callback_data=f"approve_homework_{hw_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "❌ Отклонить", callback_data=f"decline_homework_{hw_id}"
-                    ),
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            admin_message = f"Пользователь {user_id} отправил домашнее задание по курсу {active_course_id_full}, урок {lesson}."
-            try:
-                with open(file_path, "rb") as photo:
-                    await context.bot.send_photo(
-                        chat_id=ADMIN_GROUP_ID,
-                        photo=photo,
-                        caption=admin_message,
-                        reply_markup=reply_markup,
-                    )
-                    logger.info(
-                        f"Sent homework to admin group for user {user_id}, lesson {lesson}"
-                    )
-            except Exception as e:
-                logger.error(f"Ошибка при отправке сообщения админу: {e}")
-                await update.message.reply_text(
-                    "Произошла ошибка при отправке сообщения админу. Попробуйте позже."
-                )
-                return
-
-        await update.message.reply_text("Домашнее задание отправлено на проверку.")
-
-    except Exception as e:
-        logger.error(f"Ошибка при обработке домашнего задания: {e}")
-        await update.message.reply_text(
-            "Произошла ошибка при обработке домашнего задания. Попробуйте позже."
-        )
-
-
-# Инициализация БД
-conn = sqlite3.connect("bot_db.sqlite", check_same_thread=False)
-cursor = conn.cursor()
-
-# Создание таблиц
-try:
-    cursor.executescript(
-        """
-    CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    full_name TEXT NOT NULL DEFAULT 'ЧЕБУРАШКА',
-    penalty_task TEXT,
-    preliminary_material_index INTEGER DEFAULT 0,
-    tariff TEXT,
-    continuous_flow BOOLEAN DEFAULT 0,
-    next_lesson_time DATETIME,
-    active_course_id TEXT,
-    user_code TEXT,
-    support_requests INTEGER DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS homeworks (
-    hw_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    course_id TEXT,  
-    lesson INTEGER,
-    file_id TEXT,
-    message_id INTEGER,
-    status TEXT DEFAULT 'pending',
-    feedback TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    lesson_sent_time DATETIME,
-    first_submission_time DATETIME,
-    submission_time DATETIME,
-    approval_time DATETIME,
-    final_approval_time DATETIME,
-    admin_comment TEXT,
-    FOREIGN KEY(user_id) REFERENCES users(user_id)
-);
-
-CREATE TABLE IF NOT EXISTS user_tokens (
-    user_id INTEGER PRIMARY KEY,
-    tokens INTEGER DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    action TEXT, -- 'earn' или 'spend'
-    amount INTEGER,
-    reason TEXT, -- Например, 'registration', 'referral', 'lootbox'
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS lootboxes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    box_type TEXT, -- 'light' или 'full'
-    reward TEXT, -- Награда (например, 'скидка', 'товар')
-    probability REAL -- Вероятность выпадения
-);
-
-CREATE TABLE IF NOT EXISTS admins (
-    admin_id INTEGER PRIMARY KEY,
-    level INTEGER DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS admin_codes (
-    code_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    admin_id INTEGER,
-    code TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    used BOOLEAN DEFAULT FALSE,
-    FOREIGN KEY(admin_id) REFERENCES admins(admin_id)
-);
-
-CREATE TABLE IF NOT EXISTS user_settings (
-    user_id INTEGER PRIMARY KEY,
-    morning_notification TIME,
-    evening_notification TIME,
-    show_example_homework BOOLEAN DEFAULT 1,
-    FOREIGN KEY(user_id) REFERENCES users(user_id)
-);
-
-CREATE TABLE IF NOT EXISTS user_courses (
-    user_id INTEGER,
-    course_id TEXT,
-    course_type TEXT CHECK(course_type IN ('main', 'auxiliary')),
-    progress INTEGER DEFAULT 0,
-    purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-    tariff TEXT,
-    PRIMARY KEY (user_id, course_id),
-    FOREIGN KEY(user_id) REFERENCES users(user_id)
-);
-
-INSERT INTO lootboxes (box_type, reward, probability) VALUES
-('light', 'скидка', 0.8),
-('light', 'товар', 0.2);
-
-    """
-    )
-    conn.commit()
-    logger.info("База данных успешно создана и инициализирована.")
-except sqlite3.Error as e:
-    logger.error(f"Ошибка при создании базы данных: {e}")
-
-
-with conn:
-    for admin_id in ADMIN_IDS:
-        try:
-            admin_id = int(admin_id)
-            cursor.execute(
-                "INSERT OR IGNORE INTO admins (admin_id) VALUES (?)", (admin_id,)
-            )
-            conn.commit()
-            logger.info(f"Администратор с ID {admin_id} добавлен.")
-        except ValueError:
-            logger.warning(f"Некорректный ID администратора: {admin_id}")
-
-
-def add_tokens(conn: sqlite3.Connection, user_id: int, amount: int, reason: str):
+def add_tokens(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int, amount: int, reason: str):
     """Начисляет жетоны пользователю."""
     try:
         with conn:
@@ -3080,23 +2551,19 @@ def add_tokens(conn: sqlite3.Connection, user_id: int, amount: int, reason: str)
             """,
                 (user_id, "earn", amount, reason),
             )
-        logger.info(
-            f"Начислено {amount} жетонов пользователю {user_id} по причине: {reason}"
-        )
+        logger.info(f"Начислено {amount} жетонов пользователю {user_id} по причине: {reason}")
     except sqlite3.Error as e:
         logger.error(f"Ошибка при начислении жетонов пользователю {user_id}: {e}")
         raise
 
 
-def spend_tokens(conn: sqlite3.Connection, user_id: int, amount: int, reason: str):
+def spend_tokens(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int, amount: int, reason: str):
     """Списывает жетоны у пользователя."""
     try:
         with conn:
             # Проверяем баланс
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,)
-            )
+            cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
             balance_data = cursor.fetchone()
             if not balance_data or balance_data[0] < amount:
                 raise ValueError("Недостаточно жетонов")
@@ -3115,15 +2582,13 @@ def spend_tokens(conn: sqlite3.Connection, user_id: int, amount: int, reason: st
             """,
                 (user_id, "spend", amount, reason),
             )
-        logger.info(
-            f"Списано {amount} жетонов у пользователя {user_id} по причине: {reason}"
-        )
+        logger.info(f"Списано {amount} жетонов у пользователя {user_id} по причине: {reason}")
     except sqlite3.Error as e:
         logger.error(f"Ошибка при списании жетонов у пользователя {user_id}: {e}")
         raise
 
 
-def get_token_balance(conn: sqlite3.Connection, user_id: int):
+def get_token_balance(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int):
     """Возвращает текущий баланс жетонов пользователя."""
     try:
         cursor = conn.cursor()
@@ -3136,7 +2601,10 @@ def get_token_balance(conn: sqlite3.Connection, user_id: int):
 
 
 async def show_token_balance(
-    update: Update, context: CallbackContext, conn: sqlite3.Connection
+    conn: sqlite3.Connection,
+    cursor: sqlite3.Cursor,
+    update: Update,
+    context: CallbackContext,
 ):
     """Показывает баланс жетонов пользователя."""
     user_id = update.effective_user.id
@@ -3144,9 +2612,7 @@ async def show_token_balance(
     await update.message.reply_text(f"У вас {balance} АнтКоинов.")
 
 
-async def buy_lootbox(
-    update: Update, context: CallbackContext, conn: sqlite3.Connection
-):
+async def buy_lootbox(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает покупку лутбокса."""
     user_id = update.effective_user.id
 
@@ -3164,12 +2630,8 @@ async def buy_lootbox(
         reward = roll_lootbox(conn, box_type)
 
         # Отправляем сообщение с результатом
-        await update.message.reply_text(
-            f"Вы открыли лутбокс '{box_type}' и получили: {reward}"
-        )
-        logger.info(
-            f"Пользователь {user_id} купил лутбокс '{box_type}' и получил: {reward}"
-        )
+        await update.message.reply_text(f"Вы открыли лутбокс '{box_type}' и получили: {reward}")
+        logger.info(f"Пользователь {user_id} купил лутбокс '{box_type}' и получил: {reward}")
 
     except IndexError:
         await update.message.reply_text("Использование: /buy_lootbox [light/full]")
@@ -3177,25 +2639,17 @@ async def buy_lootbox(
         await update.message.reply_text(str(e))
     except sqlite3.Error as e:
         logger.error(f"Ошибка при покупке лутбокса пользователем {user_id}: {e}")
-        await update.message.reply_text(
-            "Произошла ошибка при покупке лутбокса. Попробуйте позже."
-        )
+        await update.message.reply_text("Произошла ошибка при покупке лутбокса. Попробуйте позже.")
     except Exception as e:
-        logger.error(
-            f"Необработанная ошибка при покупке лутбокса пользователем {user_id}: {e}"
-        )
-        await update.message.reply_text(
-            "Произошла необработанная ошибка. Попробуйте позже."
-        )
+        logger.error(f"Необработанная ошибка при покупке лутбокса пользователем {user_id}: {e}")
+        await update.message.reply_text("Произошла необработанная ошибка. Попробуйте позже.")
 
 
 def roll_lootbox(conn: sqlite3.Connection, box_type: str):
     """Определяет награду из лутбокса."""
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT reward, probability FROM lootboxes WHERE box_type = ?", (box_type,)
-        )
+        cursor.execute("SELECT reward, probability FROM lootboxes WHERE box_type = ?", (box_type,))
         rewards = cursor.fetchall()
 
         # Генерируем случайное число
@@ -3213,7 +2667,7 @@ def roll_lootbox(conn: sqlite3.Connection, box_type: str):
         return "ошибка"
 
 
-async def reminders(update: Update, context: CallbackContext):
+async def reminders(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     cursor.execute(
         "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
@@ -3237,7 +2691,7 @@ async def reminders(update: Update, context: CallbackContext):
     await update.message.reply_text(text)
 
 
-async def set_morning(update: Update, context: CallbackContext):
+async def set_morning(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     try:
         time1 = context.args[0]
@@ -3248,16 +2702,12 @@ async def set_morning(update: Update, context: CallbackContext):
             (time1, user_id),
         )
         conn.commit()
-        await update.message.reply_text(
-            f"🌅 Утреннее напоминание установлено на {time1}."
-        )
+        await update.message.reply_text(f"🌅 Утреннее напоминание установлено на {time1}.")
     except (IndexError, ValueError):
-        await update.message.reply_text(
-            "Неверный формат времени. Используйте формат HH:MM."
-        )
+        await update.message.reply_text("Неверный формат времени. Используйте формат HH:MM.")
 
 
-async def disable_reminders(update: Update, context: CallbackContext):
+async def disable_reminders(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     logger.info(f"disable_reminders  ")
     cursor.execute(
@@ -3268,12 +2718,10 @@ async def disable_reminders(update: Update, context: CallbackContext):
     await update.message.reply_text("🔕 Все напоминания отключены.")
 
 
-async def send_reminders(context: CallbackContext):
+async def send_reminders(conn: sqlite3.Connection, cursor: sqlite3.Cursor, context: CallbackContext):
     now = datetime.now().strftime("%H:%M")
     logger.info(f"send_reminders {now} ")
-    cursor.execute(
-        "SELECT user_id, morning_notification, evening_notification FROM user_settings"
-    )
+    cursor.execute("SELECT user_id, morning_notification, evening_notification FROM user_settings")
     for user_id, morning, evening in cursor.fetchall():
         if morning and now == morning:
             await context.bot.send_message(
@@ -3292,7 +2740,7 @@ scheduler = AsyncIOScheduler()
 
 
 # тута инициативно шлём уроки *
-def add_user_to_scheduler(user_id: int, time2: datetime, context: CallbackContext):
+def add_user_to_scheduler(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int, time2: datetime, context: CallbackContext):
     """Add user to send_lesson_by_timer with specific time."""
     # Schedule the daily message
     scheduler.add_job(
@@ -3306,7 +2754,7 @@ def add_user_to_scheduler(user_id: int, time2: datetime, context: CallbackContex
     )
 
 
-async def stats(update: Update, context: CallbackContext):
+async def stats(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     # Активные пользователи за последние 3 дня
     active_users = cursor.execute(
         """
@@ -3336,7 +2784,7 @@ async def stats(update: Update, context: CallbackContext):
     await update.message.reply_text(text)
 
 
-async def set_evening(update: Update, context: CallbackContext):
+async def set_evening(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     try:
         time = context.args[0]
@@ -3347,16 +2795,12 @@ async def set_evening(update: Update, context: CallbackContext):
             (time, user_id),
         )
         conn.commit()
-        await update.message.reply_text(
-            f"🌇 Вечернее напоминание установлено на {time}."
-        )
+        await update.message.reply_text(f"🌇 Вечернее напоминание установлено на {time}.")
     except (IndexError, ValueError):
-        await update.message.reply_text(
-            "Неверный формат времени. Используйте формат HH:MM."
-        )
+        await update.message.reply_text("Неверный формат времени. Используйте формат HH:MM.")
 
 
-def parse_delay_from_filename(filename):
+def parse_delay_from_filename(conn: sqlite3.Connection, cursor: sqlite3.Cursor, filename):
     """
     Извлекает время задержки из имени файла. TODO повторяет функционал get_lesson_files
     Возвращает задержку в секундах или None, если задержка не указана.
@@ -3375,7 +2819,7 @@ def parse_delay_from_filename(filename):
     return None
 
 
-async def send_file_with_delay(context: CallbackContext):
+async def send_file_with_delay(conn: sqlite3.Connection, cursor: sqlite3.Cursor, context: CallbackContext):
     """
     Отправляет файл с задержкой.
     """
@@ -3390,7 +2834,7 @@ async def send_file_with_delay(context: CallbackContext):
         logger.error(f"Ошибка при отправке файла с задержкой: {e}")
 
 
-async def send_file(bot, chat_id, file_path, file_name):
+async def send_file(conn: sqlite3.Connection, cursor: sqlite3.Cursor, bot, chat_id, file_path, file_name):
     """
     Отправляет файл пользователю.
     """
@@ -3406,21 +2850,17 @@ async def send_file(bot, chat_id, file_path, file_name):
                 await bot.send_audio(chat_id=chat_id, audio=audio)
         else:
             with open(file_path, "rb") as document:
-                await bot.send_document(
-                    chat_id=chat_id, document=document, filename=file_name
-                )  # Передаём имя файла
+                await bot.send_document(chat_id=chat_id, document=document, filename=file_name)  # Передаём имя файла
     except FileNotFoundError:
         logger.error(f"Файл не найден: {file_path}")
     except Exception as e:
         logger.error(f"Ошибка при отправке файла {file_name}: {e}")
-        await bot.send_message(
-            chat_id=chat_id, text=f"Не удалось загрузить файл {file_name}."
-        )
+        await bot.send_message(chat_id=chat_id, text=f"Не удалось загрузить файл {file_name}.")
 
 
 # Qwen 15 марта Замена get_lesson_after_code
 async def get_lesson_after_code(
-    update: Update, context: CallbackContext, course_type: str
+    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext, course_type: str
 ):
     user = update.effective_user
     cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user.id,))
@@ -3442,13 +2882,11 @@ async def get_lesson_after_code(
     progress_data = cursor.fetchone()
 
     lesson_number = 1 if not progress_data else progress_data[0]
-    await process_lesson(
-        user.id, lesson_number, active_course_id_full.split("_")[0], context
-    )
+    await process_lesson(user.id, lesson_number, active_course_id_full.split("_")[0], context)
 
 
 #  Qwen 15  Замена send_lesson_by_timer
-async def send_lesson_by_timer(user_id: int, context: CallbackContext):
+async def send_lesson_by_timer(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int, context: CallbackContext):
     """Send lesson to users by timer."""
     logger.info(f"Sending lesson to user {user_id} at {datetime.now()}")
 
@@ -3457,9 +2895,7 @@ async def send_lesson_by_timer(user_id: int, context: CallbackContext):
     active_course_data = cursor.fetchone()
 
     if not active_course_data or not active_course_data[0]:
-        await context.bot.send_message(
-            chat_id=user_id, text="Пожалуйста, активируйте курс."
-        )
+        await context.bot.send_message(chat_id=user_id, text="Пожалуйста, активируйте курс.")
         return
 
     active_course_id_full = active_course_data[0]
@@ -3474,9 +2910,7 @@ async def send_lesson_by_timer(user_id: int, context: CallbackContext):
     progress_data = cursor.fetchone()
 
     if not progress_data:
-        await context.bot.send_message(
-            chat_id=user_id, text="Не найден прогресс курса."
-        )
+        await context.bot.send_message(chat_id=user_id, text="Не найден прогресс курса.")
         return
 
     lesson = progress_data[0]
@@ -3497,14 +2931,14 @@ async def send_lesson_by_timer(user_id: int, context: CallbackContext):
     await process_lesson(user_id, lesson, active_course_id_full.split("_")[0], context)
 
 
-async def show_homework(update: Update, context: CallbackContext):
+async def show_homework(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
     lesson_number = query.data.split("_")[1]
     await query.edit_message_text(f"Здесь будет галерея ДЗ по {lesson_number} уроку")
 
 
-# Функция для получения предварительных материалов
+# Функция для получения предварительных материалов строго ненадо  conn: sqlite3.Connection, cursor: sqlite3.Cursor,
 def get_preliminary_materials(course_id, lesson):
     """
     Возвращает список всех предварительных материалов для урока.
@@ -3512,15 +2946,13 @@ def get_preliminary_materials(course_id, lesson):
     lesson_dir = f"courses/{course_id}/"
     materials = []
     for filename in os.listdir(lesson_dir):
-        if filename.startswith(f"lesson{lesson}_p") and os.path.isfile(
-            os.path.join(lesson_dir, filename)
-        ):
+        if filename.startswith(f"lesson{lesson}_p") and os.path.isfile(os.path.join(lesson_dir, filename)):
             materials.append(filename)
     materials.sort()  # Сортируем по порядку (p1, p2, ...)
     return materials
 
 
-# проверим скока уроков всего
+# проверим скока уроков всего строго ненадо conn: sqlite3.Connection, cursor: sqlite3.Cursor,
 def check_last_lesson(active_course_id):
     """Checking amount of lessons"""
     logger.info(f"check_last_lesson {active_course_id=}")
@@ -3538,7 +2970,7 @@ def check_last_lesson(active_course_id):
 
 
 # Обработчик кнопки "Получить предварительные материалы"
-async def send_preliminary_material(update: Update, context: CallbackContext):
+async def send_preliminary_material(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отправляет предварительные материалы для следующего урока."""
     query = update.callback_query
     await query.answer()
@@ -3547,9 +2979,7 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
 
     try:
         # Получаем active_course_id из users
-        cursor.execute(
-            "SELECT active_course_id FROM users WHERE user_id = ?", (user_id,)
-        )
+        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
         active_course_data = cursor.fetchone()
 
         if not active_course_data or not active_course_data[0]:
@@ -3572,9 +3002,7 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
         progress_data = cursor.fetchone()
 
         if not progress_data:
-            await query.message.reply_text(
-                "Не найден прогресс курса. Пожалуйста, начните курс сначала."
-            )
+            await query.message.reply_text("Не найден прогресс курса. Пожалуйста, начните курс сначала.")
             return
 
         lesson = progress_data[0]
@@ -3584,9 +3012,7 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
         materials = get_preliminary_materials(active_course_id, next_lesson)
 
         if not materials:
-            await query.message.reply_text(
-                "Предварительные материалы для следующего урока отсутствуют."
-            )
+            await query.message.reply_text("Предварительные материалы для следующего урока отсутствуют.")
             return
 
         # Отправляем материалы
@@ -3606,38 +3032,26 @@ async def send_preliminary_material(update: Update, context: CallbackContext):
                         await context.bot.send_audio(chat_id=user_id, audio=audio_file)
                 else:
                     with open(material_path, "rb") as document_file:
-                        await context.bot.send_document(
-                            chat_id=user_id, document=document_file
-                        )
+                        await context.bot.send_document(chat_id=user_id, document=document_file)
             except FileNotFoundError:
                 logger.error(f"Файл не найден: {material_path}")
                 await query.message.reply_text(f"Файл {material_file} не найден.")
             except TelegramError as e:
                 logger.error(f"Ошибка при отправке файла {material_file}: {e}")
-                await query.message.reply_text(
-                    f"Произошла ошибка при отправке файла {material_file}."
-                )
+                await query.message.reply_text(f"Произошла ошибка при отправке файла {material_file}.")
             except Exception as e:
-                logger.error(
-                    f"Неожиданная ошибка при отправке файла {material_file}: {e}"
-                )
-                await query.message.reply_text(
-                    f"Произошла непредвиденная ошибка при отправке файла {material_file}."
-                )
+                logger.error(f"Неожиданная ошибка при отправке файла {material_file}: {e}")
+                await query.message.reply_text(f"Произошла непредвиденная ошибка при отправке файла {material_file}.")
 
-        await query.message.reply_text(
-            "Все предварительные материалы для следующего урока отправлены."
-        )
+        await query.message.reply_text("Все предварительные материалы для следующего урока отправлены.")
 
     except Exception as e:
         logger.error(f"Ошибка при отправке предварительных материалов: {e}")
-        await query.message.reply_text(
-            "Произошла ошибка при отправке предварительных материалов. Попробуйте позже."
-        )
+        await query.message.reply_text("Произошла ошибка при отправке предварительных материалов. Попробуйте позже.")
 
 
 # Функция для добавления кнопки "Получить предварительные материалы"
-async def add_preliminary_button(user_id, course_type):
+async def add_preliminary_button(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id, course_type):
     # Извлекаем префикс курса (main/auxiliary)
     course_prefix = course_type.split("_")[0]  # Получаем "main" или "auxiliary"
 
@@ -3650,18 +3064,14 @@ async def add_preliminary_button(user_id, course_type):
     next_lesson = current_lesson + 1
 
     # Получаем название курса
-    cursor.execute(
-        f"SELECT {course_prefix}_course FROM users WHERE user_id = ?", (user_id,)
-    )
+    cursor.execute(f"SELECT {course_prefix}_course FROM users WHERE user_id = ?", (user_id,))
     course = cursor.fetchone()[0]
 
     materials = get_preliminary_materials(course, next_lesson)
     if not materials:
         return None
 
-    cursor.execute(
-        "SELECT preliminary_material_index FROM users WHERE user_id = ?", (user_id,)
-    )
+    cursor.execute("SELECT preliminary_material_index FROM users WHERE user_id = ?", (user_id,))
     material_index = cursor.fetchone()[0] or 0
 
     remaining_materials = len(materials) - material_index
@@ -3673,7 +3083,7 @@ async def add_preliminary_button(user_id, course_type):
     return None
 
 
-def get_average_homework_time(user_id):
+def get_average_homework_time(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id):
     cursor.execute(
         """
         SELECT AVG((JULIANDAY(approval_time) - JULIANDAY(submission_time)) * 24 * 60 * 60)
@@ -3695,7 +3105,7 @@ def get_average_homework_time(user_id):
         return "Нет данных"
 
 
-async def handle_admin_approval(update: Update, context: CallbackContext):
+async def handle_admin_approval(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     query = update.callback_query
     logger.info(f" handle_admin_approval {update.effective_user.id} -{query}")
     await query.answer()
@@ -3737,7 +3147,7 @@ def load_tariffs():
 
 
 # Обрабатывает выбор тарифа. *
-async def tariff_callback(update: Update, context: CallbackContext):
+async def tariff_callback(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает выбор тарифа."""
     query = update.callback_query
     await query.answer()
@@ -3763,18 +3173,14 @@ async def tariff_callback(update: Update, context: CallbackContext):
 
     if tariff["type"] == "payment":
         text = f"<b>{tariff['title']}</b>\n\n{tariff['description']}\n\nЦена: {tariff['price']} рублей"  # Укажите валюту, если нужно
-        await query.message.reply_text(
-            text, reply_markup=reply_markup, parse_mode="HTML"
-        )
+        await query.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
     elif tariff["type"] == "discount":
         text = f"<b>{tariff['title']}</b>\n\n{tariff['description']}"
-        await query.message.reply_text(
-            text, reply_markup=reply_markup, parse_mode="HTML"
-        )
+        await query.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
 
 # Обрабатывает нажатие кнопки "Купить" *
-async def buy_tariff(update: Update, context: CallbackContext):
+async def buy_tariff(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает нажатие кнопки "Купить"."""
     query = update.callback_query
     await query.answer()
@@ -3802,16 +3208,14 @@ async def buy_tariff(update: Update, context: CallbackContext):
 
 
 # Обрабатывает нажатие кнопки "В подарок" *
-async def gift_tariff(update: Update, context: CallbackContext):
+async def gift_tariff(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает нажатие кнопки "В подарок"."""
     query = update.callback_query
     await query.answer()
     tariff = context.user_data.get("tariff")
     logger.info(f"gift_tariff  555555 tariff={tariff}  0000000000")
     if tariff["type"] == "discount":
-        await query.message.reply_text(
-            "Подарочные сертификаты со скидками недоступны. Выберите другой тариф."
-        )
+        await query.message.reply_text("Подарочные сертификаты со скидками недоступны. Выберите другой тариф.")
         return ConversationHandler.END
 
     context.user_data["tariff_id"] = tariff["id"]  # Сохраняем tariff_id
@@ -3821,7 +3225,7 @@ async def gift_tariff(update: Update, context: CallbackContext):
 
 
 # Добавляет купленный курс пользователю. *
-async def add_purchased_course(user_id, tariff_id, context: CallbackContext):
+async def add_purchased_course(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id, tariff_id, context: CallbackContext):
     """Добавляет купленный курс пользователю."""
     logger.info(f"add_purchased_course 555555")
     try:
@@ -3836,9 +3240,7 @@ async def add_purchased_course(user_id, tariff_id, context: CallbackContext):
         existing_course = cursor.fetchone()
 
         if existing_course:
-            await context.bot.send_message(
-                user_id, "Этот курс уже есть в вашем профиле."
-            )
+            await context.bot.send_message(user_id, "Этот курс уже есть в вашем профиле.")
             return
 
         # Получаем данные о курсе из tariffs.json
@@ -3847,15 +3249,11 @@ async def add_purchased_course(user_id, tariff_id, context: CallbackContext):
 
         if not tariff:
             logger.error(f"Тариф с id {tariff_id} не найден в tariffs.json")
-            await context.bot.send_message(
-                user_id, "Произошла ошибка при добавлении курса. Попробуйте позже."
-            )
+            await context.bot.send_message(user_id, "Произошла ошибка при добавлении курса. Попробуйте позже.")
             return
 
         course_type = tariff.get("course_type", "main")  # Получаем тип курса из tariff
-        tariff_name = (
-            tariff_id.split("_")[1] if len(tariff_id.split("_")) > 1 else "default"
-        )
+        tariff_name = tariff_id.split("_")[1] if len(tariff_id.split("_")) > 1 else "default"
 
         # Добавляем курс в user_courses
         cursor.execute(
@@ -3879,19 +3277,15 @@ async def add_purchased_course(user_id, tariff_id, context: CallbackContext):
         conn.commit()
 
         logger.info(f"Курс {tariff_id} добавлен пользователю {user_id}")
-        await context.bot.send_message(
-            user_id, "Новый курс был добавлен вам в профиль."
-        )
+        await context.bot.send_message(user_id, "Новый курс был добавлен вам в профиль.")
 
     except Exception as e:
         logger.error(f"Ошибка при добавлении курса пользователю {user_id}: {e}")
-        await context.bot.send_message(
-            user_id, "Произошла ошибка при добавлении курса. Попробуйте позже."
-        )
+        await context.bot.send_message(user_id, "Произошла ошибка при добавлении курса. Попробуйте позже.")
 
 
 # Отклоняет скидку администратором. *
-async def show_stats(update: Update, context: CallbackContext):
+async def show_stats(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Показывает статистику для администратора."""
     logger.info(f"show_stats <")
     try:
@@ -3904,11 +3298,7 @@ async def show_stats(update: Update, context: CallbackContext):
         course_count = cursor.fetchone()[0]
 
         # Формируем сообщение
-        text = (
-            f"📊 Статистика:\n\n"
-            f"👥 Пользователей: {user_count}\n"
-            f"📚 Активных курсов: {course_count}"
-        )
+        text = f"📊 Статистика:\n\n" f"👥 Пользователей: {user_count}\n" f"📚 Активных курсов: {course_count}"
 
         await update.message.reply_text(text)
 
@@ -3918,7 +3308,7 @@ async def show_stats(update: Update, context: CallbackContext):
 
 
 # Отклоняет скидку администратором.*
-async def admin_approve_discount(update: Update, context: CallbackContext):
+async def admin_approve_discount(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Подтверждает скидку администратором."""
     query = update.callback_query
     await query.answer()
@@ -3927,19 +3317,15 @@ async def admin_approve_discount(update: Update, context: CallbackContext):
     tariff_id = data[4]
     try:
         # Добавляем логику уведомления пользователя
-        await context.bot.send_message(
-            user_id, f"🎉 Ваша заявка на скидку для тарифа {tariff_id} одобрена!"
-        )
+        await context.bot.send_message(user_id, f"🎉 Ваша заявка на скидку для тарифа {tariff_id} одобрена!")
         await query.message.reply_text(f"Скидка для пользователя {user_id} одобрена.")
     except Exception as e:
         logger.error(f"Ошибка при отправке уведомления пользователю {user_id}: {e}")
-        await query.message.reply_text(
-            "Скидка одобрена, но не удалось уведомить пользователя."
-        )
+        await query.message.reply_text("Скидка одобрена, но не удалось уведомить пользователя.")
 
 
 # Отклоняет скидку администратором.*
-async def admin_reject_discount(update: Update, context: CallbackContext):
+async def admin_reject_discount(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отклоняет скидку администратором."""
     query = update.callback_query
     await query.answer()
@@ -3948,19 +3334,15 @@ async def admin_reject_discount(update: Update, context: CallbackContext):
     tariff_id = data[4]
     try:
         # Добавляем логику уведомления пользователя
-        await context.bot.send_message(
-            user_id, "К сожалению, ваша заявка на скидку отклонена."
-        )
+        await context.bot.send_message(user_id, "К сожалению, ваша заявка на скидку отклонена.")
         await query.message.reply_text(f"Скидка для пользователя {user_id} отклонена.")
     except Exception as e:
         logger.error(f"Ошибка при отправке уведомления пользователю {user_id}: {e}")
-        await query.message.reply_text(
-            "Скидка отклонена, но не удалось уведомить пользователя."
-        )
+        await query.message.reply_text("Скидка отклонена, но не удалось уведомить пользователя.")
 
 
 # Подтверждает покупку админом. *
-async def admin_approve_purchase(update: Update, context: CallbackContext):
+async def admin_approve_purchase(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Подтверждает покупку админом."""
     query = update.callback_query
     await query.answer()
@@ -3970,9 +3352,7 @@ async def admin_approve_purchase(update: Update, context: CallbackContext):
     try:
         # Добавляем купленный курс пользователю
         await add_purchased_course(buyer_user_id, tariff_id, context)
-        await query.message.reply_text(
-            f"Покупка для пользователя {buyer_user_id} подтверждена!"
-        )
+        await query.message.reply_text(f"Покупка для пользователя {buyer_user_id} подтверждена!")
         await context.bot.send_message(
             chat_id=buyer_user_id,
             text="Ваш чек был подтверждён, приятного пользования курсом",
@@ -3983,7 +3363,7 @@ async def admin_approve_purchase(update: Update, context: CallbackContext):
 
 
 # Отклоняет покупку админом.*
-async def admin_reject_purchase(update: Update, context: CallbackContext):
+async def admin_reject_purchase(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отклоняет покупку админом."""
     query = update.callback_query
     await query.answer()
@@ -3998,7 +3378,7 @@ async def admin_reject_purchase(update: Update, context: CallbackContext):
 
 
 # Обрабатывает селфи для получения скидки. *
-async def process_selfie(update: Update, context: CallbackContext):
+async def process_selfie(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает селфи для получения скидки."""
     user_id = update.effective_user.id
     tariff = context.user_data.get("tariff")
@@ -4007,14 +3387,12 @@ async def process_selfie(update: Update, context: CallbackContext):
     file_id = photo.file_id
     context.user_data["selfie_file_id"] = file_id
 
-    await update.message.reply_text(
-        "Теперь отправьте описание, почему вы хотите получить эту скидку:"
-    )
+    await update.message.reply_text("Теперь отправьте описание, почему вы хотите получить эту скидку:")
     return WAIT_FOR_DESCRIPTION
 
 
 # Обрабатывает описание для получения скидки.*
-async def process_description(update: Update, context: CallbackContext):
+async def process_description(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает описание для получения скидки."""
     user_id = update.effective_user.id
     tariff = context.user_data.get("tariff")
@@ -4039,17 +3417,13 @@ async def process_description(update: Update, context: CallbackContext):
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_photo(
-        chat_id=ADMIN_GROUP_ID, photo=photo, caption=caption, reply_markup=reply_markup
-    )
-    await update.message.reply_text(
-        "Ваш запрос отправлен на рассмотрение администраторам."
-    )
+    await context.bot.send_photo(chat_id=ADMIN_GROUP_ID, photo=photo, caption=caption, reply_markup=reply_markup)
+    await update.message.reply_text("Ваш запрос отправлен на рассмотрение администраторам.")
     return ConversationHandler.END
 
 
 # Обрабатывает загруженный чек *
-async def process_check(update: Update, context: CallbackContext):
+async def process_check(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает загруженный чек."""
     user_id = update.effective_user.id
     tariff = context.user_data.get("tariff")
@@ -4079,23 +3453,19 @@ async def process_check(update: Update, context: CallbackContext):
         reply_markup=reply_markup,
     )
 
-    await update.message.reply_text(
-        "Чек отправлен на проверку администраторам. Ожидайте подтверждения."
-    )
+    await update.message.reply_text("Чек отправлен на проверку администраторам. Ожидайте подтверждения.")
     context.user_data.clear()  # Очищаем context.user_data
     return ConversationHandler.END
 
 
 # Обрабатывает User ID получателя подарка. *
-async def process_gift_user_id(update: Update, context: CallbackContext):
+async def process_gift_user_id(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Обрабатывает User ID получателя подарка."""
     gift_user_id = update.message.text
     logger.info(f"process_gift_user_id  {gift_user_id} -------------<")
 
     if not gift_user_id.isdigit():
-        await update.message.reply_text(
-            "Пожалуйста, введите корректный User ID, состоящий только из цифр."
-        )
+        await update.message.reply_text("Пожалуйста, введите корректный User ID, состоящий только из цифр.")
         return WAIT_FOR_GIFT_USER_ID
 
     context.user_data["gift_user_id"] = gift_user_id
@@ -4108,7 +3478,7 @@ async def process_gift_user_id(update: Update, context: CallbackContext):
 
 
 # просим номерок *
-async def process_phone_number(update: Update, context: CallbackContext):
+async def process_phone_number(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     contact = update.message.contact
     phone_number = contact.phone_number
     logger.info(f"process_phone_number -------------<")
@@ -4140,18 +3510,14 @@ async def process_phone_number(update: Update, context: CallbackContext):
             reply_markup=reply_markup,
         )
     else:
-        await context.bot.send_message(
-            chat_id=ADMIN_GROUP_ID, text=caption, reply_markup=reply_markup
-        )
+        await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=caption, reply_markup=reply_markup)
 
-    await update.message.reply_text(
-        "Ваш запрос отправлен на рассмотрение администраторам."
-    )
+    await update.message.reply_text("Ваш запрос отправлен на рассмотрение администраторам.")
     context.user_data.clear()  # Очищаем context.user_data
     return ConversationHandler.END
 
 
-async def get_next_lesson_time(user_id):
+async def get_next_lesson_time(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id):
     """Получает время следующего урока из базы данных."""
     try:
         cursor.execute(
@@ -4165,14 +3531,10 @@ async def get_next_lesson_time(user_id):
         if result and result[0]:
             next_lesson_time_str = result[0]
             try:
-                next_lesson_time = datetime.datetime.strptime(
-                    next_lesson_time_str, "%Y-%m-%d %H:%M:%S"
-                )
+                next_lesson_time = datetime.datetime.strptime(next_lesson_time_str, "%Y-%m-%d %H:%M:%S")
                 return next_lesson_time.strftime("%Y-%m-%d %H:%M:%S")
             except ValueError as e:
-                logger.error(
-                    f"Ошибка при парсинге времени: {e}, строка: {next_lesson_time_str}"
-                )
+                logger.error(f"Ошибка при парсинге времени: {e}, строка: {next_lesson_time_str}")
                 return "время указано в неверном формате"
         else:
             # Если время не определено, устанавливаем его на 3 часа после submission_time
@@ -4188,12 +3550,8 @@ async def get_next_lesson_time(user_id):
 
             if submission_result and submission_result[0]:
                 submission_time_str = submission_result[0]
-                submission_time = datetime.strptime(
-                    submission_time_str, "%Y-%m-%d %H:%M:%S"
-                )
-                next_lesson_time = submission_time + timedelta(
-                    hours=DEFAULT_LESSON_DELAY_HOURS
-                )
+                submission_time = datetime.strptime(submission_time_str, "%Y-%m-%d %H:%M:%S")
+                next_lesson_time = submission_time + timedelta(hours=DEFAULT_LESSON_DELAY_HOURS)
                 next_lesson_time_str = next_lesson_time.strftime("%Y-%m-%d %H:%M:%S")
 
                 # Обновляем время в базе данных
@@ -4213,30 +3571,20 @@ async def get_next_lesson_time(user_id):
         return "время пока не определено"
 
 
-def setup_admin_commands(application):
+def setup_admin_commands(conn: sqlite3.Connection, cursor: sqlite3.Cursor, application):
     """Настраивает команды администратора."""
     application.add_handler(CommandHandler("stats", show_stats))
-    application.add_handler(
-        CallbackQueryHandler(admin_approve_purchase, pattern="^admin_approve_purchase_")
-    )
-    application.add_handler(
-        CallbackQueryHandler(admin_reject_purchase, pattern="^admin_reject_purchase_")
-    )
-    application.add_handler(
-        CallbackQueryHandler(admin_approve_discount, pattern="^admin_approve_discount_")
-    )
-    application.add_handler(
-        CallbackQueryHandler(admin_reject_discount, pattern="^admin_reject_discount_")
-    )
+    application.add_handler(CallbackQueryHandler(admin_approve_purchase, pattern="^admin_approve_purchase_"))
+    application.add_handler(CallbackQueryHandler(admin_reject_purchase, pattern="^admin_reject_purchase_"))
+    application.add_handler(CallbackQueryHandler(admin_approve_discount, pattern="^admin_approve_discount_"))
+    application.add_handler(CallbackQueryHandler(admin_reject_discount, pattern="^admin_reject_discount_"))
 
 
-def setup_user_commands(application):
+def setup_user_commands(conn: sqlite3.Connection, cursor: sqlite3.Cursor, application):
     """Настраивает команды пользователя."""
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", show_main_menu))
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message)
-    )
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     application.add_handler(CallbackQueryHandler(tariff_callback, pattern="^tariff_"))
 
     # лутбоксы
@@ -4244,44 +3592,158 @@ def setup_user_commands(application):
     application.add_handler(CommandHandler("buy_lootbox", buy_lootbox))
 
 
+def init_lootboxes(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
+    try:
+        cursor.execute("SELECT COUNT(*) FROM lootboxes")
+        count = cursor.fetchone()[0]
+        if count == 0:
+            cursor.execute(
+                """
+                INSERT INTO lootboxes (box_type, reward, probability) VALUES
+                ('light', 'скидка', 0.8),
+                ('light', 'товар', 0.2);
+                """
+            )
+            conn.commit()
+            logger.info("Таблица lootboxes инициализирована.")
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при инициализации таблицы lootboxes: {e}")
+
+
 def main():
+    # Создание таблиц
+    # Инициализация БД
+    conn = sqlite3.connect("bot_db.sqlite", check_same_thread=False)
+    cursor = conn.cursor()
+
+    try:
+        cursor.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                full_name TEXT NOT NULL DEFAULT 'ЧЕБУРАШКА',
+                penalty_task TEXT,
+                preliminary_material_index INTEGER DEFAULT 0,
+                tariff TEXT,
+                continuous_flow BOOLEAN DEFAULT 0,
+                next_lesson_time DATETIME,
+                active_course_id TEXT,
+                user_code TEXT,
+                support_requests INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS homeworks (
+                hw_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                course_id TEXT,  
+                lesson INTEGER,
+                file_id TEXT,
+                message_id INTEGER,
+                status TEXT DEFAULT 'pending',
+                feedback TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                lesson_sent_time DATETIME,
+                first_submission_time DATETIME,
+                submission_time DATETIME,
+                approval_time DATETIME,
+                final_approval_time DATETIME,
+                admin_comment TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_tokens (
+                user_id INTEGER PRIMARY KEY,
+                tokens INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                action TEXT, -- 'earn' или 'spend'
+                amount INTEGER,
+                reason TEXT, -- Например, 'registration', 'referral', 'lootbox'
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS lootboxes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                box_type TEXT, -- 'light' или 'full'
+                reward TEXT, -- Награда (например, 'скидка', 'товар')
+                probability REAL -- Вероятность выпадения
+            );
+
+            CREATE TABLE IF NOT EXISTS admins (
+                admin_id INTEGER PRIMARY KEY,
+                level INTEGER DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_codes (
+                code_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER,
+                code TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                used BOOLEAN DEFAULT FALSE,
+                FOREIGN KEY(admin_id) REFERENCES admins(admin_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id INTEGER PRIMARY KEY,
+                morning_notification TIME,
+                evening_notification TIME,
+                show_example_homework BOOLEAN DEFAULT 1,
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_courses (
+                user_id INTEGER,
+                course_id TEXT,
+                course_type TEXT CHECK(course_type IN ('main', 'auxiliary')),
+                progress INTEGER DEFAULT 0,
+                purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                tariff TEXT,
+                PRIMARY KEY (user_id, course_id),
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            );
+            """
+        )
+        conn.commit()
+        logger.info("База данных успешно создана.")
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при создании базы данных: {e}")
+
+    with conn:
+        for admin_id in ADMIN_IDS:
+            try:
+                admin_id = int(admin_id)
+                cursor.execute("INSERT OR IGNORE INTO admins (admin_id) VALUES (?)", (admin_id,))
+                conn.commit()
+                logger.info(f"Администратор с ID {admin_id} добавлен.")
+            except ValueError:
+                logger.warning(f"Некорректный ID администратора: {admin_id}")
+
+    init_lootboxes(conn, cursor)
+
     application = ApplicationBuilder().token(TOKEN).persistence(persistence).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            WAIT_FOR_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_info)
-            ],
-            WAIT_FOR_CODE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code_words)
-            ],
+            WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_info)],
+            WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code_words)],
             ACTIVE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message),
                 CallbackQueryHandler(button_handler),
-                MessageHandler(filters.Document.IMAGE, handle_document),  # домашенька
-                MessageHandler(filters.PHOTO, handle_homework_submission),  # домашенька
-                CallbackQueryHandler(
-                    self_approve_homework, pattern=r"^self_approve_\d+$"
-                ),
-                CallbackQueryHandler(
-                    approve_homework, pattern=r"^approve_homework_\d+_\d+$"
-                ),
+                MessageHandler(filters.Document.IMAGE | filters.PHOTO, handle_homework_submission),
+                CallbackQueryHandler(self_approve_homework, pattern=r"^self_approve_\d+$"),
+                CallbackQueryHandler(approve_homework, pattern=r"^approve_homework_\d+_\d+$"),
+                CommandHandler("self_approve", self_approve_homework),
             ],
-            WAIT_FOR_SUPPORT_TEXT: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND | filters.PHOTO, get_support_text
-                )
-            ],
+            WAIT_FOR_SUPPORT_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND | filters.PHOTO, get_support_text)],
             WAIT_FOR_SELFIE: [MessageHandler(filters.PHOTO, process_selfie)],
             WAIT_FOR_DESCRIPTION: [MessageHandler(filters.TEXT, process_description)],
-            WAIT_FOR_CHECK: [
-                MessageHandler(filters.PHOTO, process_check)
-            ],  # вот тут ждём чек
+            WAIT_FOR_CHECK: [MessageHandler(filters.PHOTO, process_check)],  # вот тут ждём чек
             WAIT_FOR_GIFT_USER_ID: [MessageHandler(filters.TEXT, process_gift_user_id)],
-            WAIT_FOR_PHONE_NUMBER: [
-                MessageHandler(filters.CONTACT, process_phone_number)
-            ],
+            WAIT_FOR_PHONE_NUMBER: [MessageHandler(filters.CONTACT, process_phone_number)],
         },
         fallbacks=[],
         persistent=True,  # Включаем персистентность
@@ -4293,15 +3755,10 @@ def main():
     setup_user_commands(application)
     setup_admin_commands(application)
 
-    application.add_handler(MessageHandler(filters.Document.IMAGE, handle_document))
     # Обработчик для кнопок предварительных материалов
-    application.add_handler(
-        CallbackQueryHandler(send_preliminary_material, pattern="^preliminary_")
-    )
+    application.add_handler(CallbackQueryHandler(send_preliminary_material, pattern="^preliminary_"))
 
-    application.job_queue.run_repeating(
-        send_reminders, interval=60, first=10
-    )  # Проверка каждую минуту
+    application.job_queue.run_repeating(send_reminders, interval=60, first=10)  # Проверка каждую минуту
     application.add_handler(CommandHandler("reminders", reminders))
     application.add_handler(CommandHandler("set_morning", set_morning))
     application.add_handler(CommandHandler("set_evening", set_evening))
