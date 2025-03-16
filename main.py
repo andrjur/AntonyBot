@@ -58,6 +58,17 @@ COURSE_DATA_FILE = "courses.json"
 
 TARIFFS_FILE = "tariffs.json"
 
+# Add a custom error handler decorator
+def handle_telegram_errors(func):
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except TelegramError as e:
+            logger.error(f"Telegram API Error: {e}")
+            # Handle specific error types
+        except Exception as e:
+            logger.error(f"General Error: {e}")
+    return wrapper
 
 def load_course_data(filename):
     """Загружает данные о курсах из JSON файла."""
@@ -89,11 +100,11 @@ def load_delay_messages(file_path="delay_messages.txt"):
             messages = [line.strip() for line in file if line.strip()]
         return messages
     except FileNotFoundError:
-        logger.error(f"Файл с фразами не найден: {file_path}")
-        return ["Ещё материал идёт, домашнее задание – можно уже делать"]
+        logger.error(f"Файл c фразами не найден: {file_path}")
+        return ["Ещё материал идёт, домашнее задание - можно уже делать"]
     except Exception as e:
         logger.error(f"Ошибка при загрузке фраз из файла: {e}")
-        return ["Ещё материал идёт, домашнее задание – можно уже делать"]
+        return ["Ещё материал идёт, домашнее задание - можно уже делать"]
 
 
 # Загрузка фраз в начале программы
@@ -166,7 +177,7 @@ def clear_user_cache(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: 
 
 # кому платить строго ненадо    conn: sqlite3.Connection, cursor: sqlite3.Cursor,
 def load_payment_info(filename):
-    """Загружает данные об оплате из JSON файла."""
+    """Загружает данные оплаты из JSON файла."""
     try:
         with open(filename, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -244,6 +255,7 @@ async def handle_user_info(
 
 
 # проверка оплаты через кодовые слова *
+@handle_telegram_errors
 async def handle_code_words(
     conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext
 ):  # Добавил conn и cursor
@@ -276,6 +288,7 @@ async def handle_code_words(
 
 
 # текущий урок заново
+@handle_telegram_errors
 async def get_current_lesson(update: Update, context: CallbackContext):
     """Отправляет все материалы текущего урока."""
     conn = sqlite3.connect("database.db")
@@ -409,6 +422,7 @@ async def get_current_lesson(update: Update, context: CallbackContext):
 
 
 # Qwen 15 марта утром строго без conn: sqlite3.Connection, cursor: sqlite3.Cursor,
+@handle_telegram_errors
 async def process_lesson(user_id, lesson_number, active_course_id, context):
     """Обрабатывает текст урока и отправляет связанные файлы."""
     try:
@@ -2690,48 +2704,90 @@ async def reminders(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Up
 
     await update.message.reply_text(text)
 
-
+@handle_telegram_errors
 async def set_morning(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
+    """Устанавливает утреннее напоминание."""
     user_id = update.effective_user.id
     try:
         time1 = context.args[0]
         if not re.match(r"^\d{2}:\d{2}$", time1):
             raise ValueError
         cursor.execute(
-            "UPDATE user_settings SET morning_notification = ? WHERE user_id = ?",
+            """
+            UPDATE user_settings
+            SET morning_notification = ?
+            WHERE user_id = ?
+        """,
             (time1, user_id),
         )
         conn.commit()
-        await update.message.reply_text(f"🌅 Утреннее напоминание установлено на {time1}.")
+        # Проверяем, откуда пришел запрос (сообщение или callback query)
+        if update.message:
+            await update.message.reply_text(f"Утреннее напоминание установлено на {time1}.")
+        elif update.callback_query:
+            await update.callback_query.message.reply_text(f"Утреннее напоминание установлено на {time1}.")
+        else:
+            logger.warning("Не удалось определить тип update.")
+
     except (IndexError, ValueError):
-        await update.message.reply_text("Неверный формат времени. Используйте формат HH:MM.")
+        if update.message:
+            await update.message.reply_text("Неверный формат времени. Используйте формат HH:MM.")
+        elif update.callback_query:
+            await update.callback_query.message.reply_text("Неверный формат времени. Используйте формат HH:MM.")
+        else:
+            logger.warning("Не удалось определить тип update.")
+
 
 
 async def disable_reminders(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
+    """Отключает все напоминания."""
     user_id = update.effective_user.id
-    logger.info(f"disable_reminders  ")
+    logger.info(f"disable_reminders ")
     cursor.execute(
-        "UPDATE user_settings SET morning_notification = NULL, evening_notification = NULL WHERE user_id = ?",
+        """
+        UPDATE user_settings
+        SET morning_notification = NULL, evening_notification = NULL
+        WHERE user_id = ?
+        """,
         (user_id,),
     )
     conn.commit()
-    await update.message.reply_text("🔕 Все напоминания отключены.")
+    # Проверяем, откуда пришел запрос (сообщение или callback query)
+    if update.message:
+        await update.message.reply_text("Напоминания отключены.")
+    elif update.callback_query:
+        await update.callback_query.message.reply_text("Напоминания отключены.")
+    else:
+        logger.warning("Не удалось определить тип update.")
 
+
+
+# Create a wrapper function for send_reminders
+async def send_reminders_wrapper(context):
+    """Wrapper function for send_reminders to provide database connection"""
+    logger.info(f" send_reminders_wrapper ")
+    conn = sqlite3.connect("bot_db.sqlite", check_same_thread=False)
+    cursor = conn.cursor()
+    try:
+        await send_reminders(conn, cursor, context)
+    finally:
+        cursor.close()
+        conn.close()
 
 async def send_reminders(conn: sqlite3.Connection, cursor: sqlite3.Cursor, context: CallbackContext):
     now = datetime.now().strftime("%H:%M")
-    logger.info(f"send_reminders {now} ")
+    logger.info(f" send_reminders {now} ")
     cursor.execute("SELECT user_id, morning_notification, evening_notification FROM user_settings")
     for user_id, morning, evening in cursor.fetchall():
         if morning and now == morning:
             await context.bot.send_message(
                 chat_id=user_id,
-                text="🌅 Доброе утро! Не забудьте посмотреть материалы курса.",
+                text="🌅 Доброе утро! Посмотрите материалы курса.",
             )
         if evening and now == evening:
             await context.bot.send_message(
                 chat_id=user_id,
-                text="🌇 Добрый вечер! Не забудьте выполнить домашнее задание.",
+                text="🌇 Добрый вечер! Выполните домашнее задание.",
             )
 
 
@@ -2740,6 +2796,7 @@ scheduler = AsyncIOScheduler()
 
 
 # тута инициативно шлём уроки *
+@handle_telegram_errors
 def add_user_to_scheduler(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int, time2: datetime, context: CallbackContext):
     """Add user to send_lesson_by_timer with specific time."""
     # Schedule the daily message
@@ -2779,7 +2836,7 @@ async def stats(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update
     text = "📊 Статистика:\n"
     text += f"👥 Активных пользователей за последние 3 дня: {active_users}\n"
     text += f"📚 Домашних заданий за последние сутки: {recent_homeworks}\n"
-    text += f"👤 Всего пользователей с начала работы бота: {total_users}"
+    text += f"👤 Пользователей всего: {total_users}"
 
     await update.message.reply_text(text)
 
@@ -3571,7 +3628,7 @@ async def get_next_lesson_time(conn: sqlite3.Connection, cursor: sqlite3.Cursor,
         return "время пока не определено"
 
 
-def setup_admin_commands(conn: sqlite3.Connection, cursor: sqlite3.Cursor, application):
+def setup_admin_commands(application):
     """Настраивает команды администратора."""
     application.add_handler(CommandHandler("stats", show_stats))
     application.add_handler(CallbackQueryHandler(admin_approve_purchase, pattern="^admin_approve_purchase_"))
@@ -3580,7 +3637,7 @@ def setup_admin_commands(conn: sqlite3.Connection, cursor: sqlite3.Cursor, appli
     application.add_handler(CallbackQueryHandler(admin_reject_discount, pattern="^admin_reject_discount_"))
 
 
-def setup_user_commands(conn: sqlite3.Connection, cursor: sqlite3.Cursor, application):
+def setup_user_commands(application):
     """Настраивает команды пользователя."""
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", show_main_menu))
@@ -3758,7 +3815,7 @@ def main():
     # Обработчик для кнопок предварительных материалов
     application.add_handler(CallbackQueryHandler(send_preliminary_material, pattern="^preliminary_"))
 
-    application.job_queue.run_repeating(send_reminders, interval=60, first=10)  # Проверка каждую минуту
+    application.job_queue.run_repeating(send_reminders_wrapper, interval=60, first=10)  # Проверка каждую минуту
     application.add_handler(CommandHandler("reminders", reminders))
     application.add_handler(CommandHandler("set_morning", set_morning))
     application.add_handler(CommandHandler("set_evening", set_evening))
