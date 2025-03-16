@@ -3,7 +3,8 @@
 import logging
 import mimetypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram.ext import PicklePersistence
+from telegram.constants import ParseMode
+from telegram.ext import PicklePersistence, ContextTypes
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -22,6 +23,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ConversationHandler,
 )
+
 import sqlite3
 from datetime import datetime, timedelta
 import time
@@ -32,6 +34,7 @@ import asyncio
 from telegram.error import TelegramError
 import json
 import random
+
 
 
 class Course:
@@ -73,6 +76,13 @@ def handle_telegram_errors(func):
     return wrapper
 
 
+async def logging_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Логирует все входящие сообщения."""
+    user_id = update.effective_user.id
+    state = context.user_data.get('state', 'NO_STATE')
+    logger.info(f"Пользователь {user_id} находится в состоянии {state}")
+    return True  # Продолжаем обработку
+
 def load_course_data(filename):
     """Загружает данные о курсах из JSON файла."""
     try:
@@ -112,6 +122,7 @@ def load_delay_messages(file_path="delay_messages.txt"):
 
 # Загрузка фраз в начале программы
 DELAY_MESSAGES = load_delay_messages()
+logger.info(f"DELAY_MESSAGES  {DELAY_MESSAGES}")
 
 
 load_dotenv()
@@ -154,6 +165,7 @@ PAYMENT_INFO_FILE = "payment_info.json"
 
 # Словарь для кэширования данных
 USER_CACHE = {}
+
 
 
 def get_user_data(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int):  # Добавил conn и cursor
@@ -214,12 +226,14 @@ async def handle_user_info(
     full_name = update.effective_message.text.strip()
 
     # Логирование текущего состояния пользователя
-    logger.info(f" handle_user_info {user_id} - Current state")
+    logger.info(f" handle_user_info {user_id} ============================================")
 
     # Проверка на пустое имя
     if not full_name:
         await update.effective_message.reply_text("Имя не может быть пустым. Введите ваше полное имя:")
         return WAIT_FOR_NAME
+
+    logger.info(f" full_name {full_name} ==============================")
 
     try:
         # Сохранение имени пользователя в базе данных
@@ -235,9 +249,11 @@ async def handle_user_info(
         conn.commit()
 
         # Подтверждение записи
-        user_data = get_user_data(conn, cursor, user_id)  # Добавил conn и cursor
+        cursor.execute("SELECT user_id, full_name FROM users WHERE user_id = ?", (user_id,))
+        user_data = cursor.fetchone()
+
         if user_data:
-            saved_name = user_data["full_name"]
+            saved_name = user_data[1]  # Используем индекс 1 для получения full_name
         else:
             saved_name = None
 
@@ -273,11 +289,11 @@ async def handle_code_words(
         await activate_course(conn, cursor, update, context, user_id, user_code)
         logger.info(f" активирован {user_id}  return ACTIVE ")
 
-        # Отправляем текущий урок
-        await get_current_lesson(update, context)
-
         # Отправляем сообщение
-        await update.message.reply_text("Курс активирован! Вы переходите в главное меню.")
+        await update.message.reply_text("Курс активирован! Получите первый урок и Вы переходите в главное меню.")
+
+        # Отправляем текущий урок
+        await get_current_lesson(conn, cursor, update, context)
 
         # Сбрасываем состояние ожидания кодового слова
         context.user_data["waiting_for_code"] = False
@@ -289,16 +305,19 @@ async def handle_code_words(
         await update.message.reply_text("Неверное кодовое слово. Попробуйте еще раз.")
         return WAIT_FOR_CODE
 
+def escape_markdown_v2(text):
+    """Экранирует специальные символы для Markdown V2."""
+    escape_chars = r"_*[]()~`>#+-=|{}.!"
+    return "".join(f"\\{char}" if char in escape_chars else char for char in text)
+
+
 
 # текущий урок заново
 @handle_telegram_errors
-async def get_current_lesson(update: Update, context: CallbackContext):
+async def get_current_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Отправляет все материалы текущего урока."""
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-
     user_id = update.effective_user.id
-    logger.info(f" 777 get_current_lesson {user_id} - Current state")
+    logger.info(f"get_current_lesson: user_id={user_id}")
 
     try:
         # Получаем active_course_id из users
@@ -306,7 +325,6 @@ async def get_current_lesson(update: Update, context: CallbackContext):
         active_course_data = cursor.fetchone()
 
         if not active_course_data or not active_course_data[0]:
-            # Используем callback_query, если это callback
             if update.callback_query:
                 await update.callback_query.message.reply_text("Активируйте курс через кодовое слово.")
             else:
@@ -314,39 +332,25 @@ async def get_current_lesson(update: Update, context: CallbackContext):
             return
 
         active_course_id_full = active_course_data[0]
-        # Обрезаем название курса до первого символа "_"
         active_course_id = active_course_id_full.split("_")[0]
-        logger.info(f" active_course_id {active_course_id} +")
-
-        # Получаем course_type и tariff из context.user_data
-        course_type = context.user_data.get("course_type", "main")
-        tariff = context.user_data.get("tariff", "self_check")
+        logger.info(f"active_course_id: {active_course_id}")
 
         # Получаем progress (номер урока) из user_courses
         cursor.execute(
-            """
-            SELECT progress
-            FROM user_courses
-            WHERE user_id = ? AND course_id = ?
-        """,
+            "SELECT progress FROM user_courses WHERE user_id = ? AND course_id = ?",
             (user_id, active_course_id_full),
         )
         progress_data = cursor.fetchone()
 
-        # Если progress не найден, начинаем с первого урока и создаем запись
+        # Если progress не найден, начинаем с первого урока
         if not progress_data:
             lesson = 1
             cursor.execute(
-                """
-                INSERT INTO user_courses (user_id, course_id, course_type, progress, tariff)
-                VALUES (?, ?, ?, ?, ?)
-            """,
-                (user_id, active_course_id_full, course_type, lesson, tariff),
+                "INSERT INTO user_courses (user_id, course_id, course_type, progress, tariff) VALUES (?, ?, ?, ?, ?)",
+                (user_id, active_course_id_full, context.user_data.get("course_type", "main"), lesson, context.user_data.get("tariff", "self_check")),
             )
-
-            conn.commit()
-            logger.warning(f" get_current_lesson с 1 урока начали на нижнем тарифе (самый быстрый) {active_course_id_full=}")
-            # Используем callback_query, если это callback
+            await conn.commit()
+            logger.warning(f"Начали курс с первого урока: {active_course_id_full}")
             if update.callback_query:
                 await update.callback_query.message.reply_text("Вы начинаете курс с первого урока.")
             else:
@@ -354,26 +358,52 @@ async def get_current_lesson(update: Update, context: CallbackContext):
         else:
             lesson = progress_data[0]
 
-        lesson_text = get_lesson_text(lesson, active_course_id)  #
+        # Получаем текст урока
+        lesson_data = get_lesson_text(lesson, active_course_id)
 
-        # Add media in function
+        if not lesson_data:
+            logger.error(f"Файл с уроком не найден: lessons/{active_course_id}/lesson{lesson}.md, lessons/{active_course_id}/lesson{lesson}.html или lessons/{active_course_id}/lesson{lesson}.txt")
+            await context.bot.send_message(chat_id=user_id, text="Файл с уроком не найден.")
+            return
+
+        lesson_text, parse_mode = lesson_data
+        logger.info(f"777 читаем lesson_text={lesson_text[:35]}  {parse_mode=} отправляем методом context.bot.send_message() -------")
+        # Отправляем текст урока
+        if lesson_text:
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=lesson_text,
+                    parse_mode=parse_mode,
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при отправке текста урока: {e}")
+                if update.callback_query:
+                    await update.callback_query.message.reply_text(f"Ошибка при отправке текста урока: {e}")
+                else:
+                    await update.message.reply_text(f"Ошибка при отправке текста урока: {e}")
+
+        # Отправляем файлы урока
         lesson_files = get_lesson_files(user_id, lesson, active_course_id)
         for i, file_info in enumerate(lesson_files, start=1):
             file_path = file_info["path"]
             file_type = file_info["type"]
-            delay = file_info["delay"]  # Получаем задержку
-            logger.info(f" {i} файл {file_path=} {file_type=} {delay=}")  # добавить в лог
+            delay = file_info["delay"]
+            logger.info(f"Файл {i}: {file_path=}, {file_type=}, {delay=}")
 
             # Задержка перед отправкой
             if delay > 0:
                 logger.info(f"Ожидание {delay} секунд перед отправкой файла {file_path}")
                 if update.callback_query:
-                    await update.callback_query.message.reply_text("ещё материал идёт, домашнее задание – можно уже делать")
+                    await update.callback_query.message.reply_text("Ещё материал идёт, домашнее задание – можно уже делать.")
                 else:
-                    await update.message.reply_text("ещё материал идёт, домашнее задание – можно уже делать")
+                    await update.message.reply_text("Ещё материал идёт, домашнее задание – можно уже делать.")
                 await asyncio.sleep(delay)
 
             try:
+                if not os.path.exists(file_path):
+                    raise FileNotFoundError(f"Файл не найден: {file_path}")
+
                 with open(file_path, "rb") as file:
                     if file_type == "photo":
                         await context.bot.send_photo(chat_id=user_id, photo=file)
@@ -385,43 +415,74 @@ async def get_current_lesson(update: Update, context: CallbackContext):
                         await context.bot.send_document(chat_id=user_id, document=file)
 
             except FileNotFoundError:
-                logger.error(f"Media file not found: {file_path}")
+                logger.error(f"Файл не найден: {file_path}")
                 if update.callback_query:
-                    await update.callback_query.message.reply_text(f"Media file not found: {file_path}")
+                    await update.callback_query.message.reply_text(f"Файл не найден: {file_path}")
                 else:
-                    await update.message.reply_text(f"Media file not found: {file_path}")
+                    await update.message.reply_text(f"Файл не найден: {file_path}")
             except Exception as e:
-                logger.error(f"Error sending media file: {e}")
+                logger.error(f"Ошибка при отправке файла: {e}")
                 if update.callback_query:
-                    await update.callback_query.message.reply_text(f"Error sending media file. {e}")
+                    await update.callback_query.message.reply_text(f"Ошибка при отправке файла: {e}")
                 else:
-                    await update.message.reply_text(f"Error sending media file. {e}")
+                    await update.message.reply_text(f"Ошибка при отправке файла: {e}")
 
+        # Сообщение о количестве отправленных файлов
         if update.callback_query:
-            await update.callback_query.message.reply_text(f"послано {len(lesson_files)} файлов")
+            await update.callback_query.message.reply_text(f"Отправлено {len(lesson_files)} файлов.")
         else:
-            await update.message.reply_text(f"послано {len(lesson_files)} файлов")
+            await update.message.reply_text(f"Отправлено {len(lesson_files)} файлов.")
 
-        # Calculate the default release time of the next lesson
+        # Рассчитываем время следующего урока
         next_lesson = lesson + 1
         next_lesson_release_time = datetime.now() + timedelta(hours=DEFAULT_LESSON_INTERVAL)
         next_lesson_release_str = next_lesson_release_time.strftime("%d-%m-%Y %H:%M:%S")
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"След урок {next_lesson} будет в {next_lesson_release_str}",
+            text=f"Следующий урок {next_lesson} будет доступен {next_lesson_release_str}.",
         )
-        logger.info(f" 555 След урок {next_lesson} будет в {next_lesson_release_str}")
+        logger.info(f"Следующий урок {next_lesson} будет доступен {next_lesson_release_str}.")
 
-        # и показываем меню чтоб далеко не тянуться
-        await show_main_menu(conn, cursor, update, context)  # Добавил conn и cursor
+        # Показываем главное меню
+        await show_main_menu(conn, cursor, update, context)
 
     except Exception as e:
         logger.error(f"Ошибка при получении текущего урока: {e}")
-        # Используем callback_query, если это callback
         if update.callback_query:
             await update.callback_query.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
         else:
             await update.message.reply_text("Ошибка при получении текущего урока. Попробуйте позже.")
+
+
+async def send_file_with_delay(user_id, file_info, context):
+    """Отправляет файл с задержкой."""
+    file_path = file_info["path"]
+    file_type = file_info["type"]
+    delay = file_info["delay"]
+
+    if delay > 0:
+        # Выбираем случайное сообщение из DELAY_MESSAGES
+        delay_message = random.choice(DELAY_MESSAGES)
+        logger.info(f"Задержка перед отправкой файла {file_path}: {delay} секунд {delay_message=}")
+        await context.bot.send_message(chat_id=user_id, text=delay_message)
+        await asyncio.sleep(delay)
+
+    try:
+        with open(file_path, "rb") as file:
+            if file_type == "photo":
+                await context.bot.send_photo(chat_id=user_id, photo=file)
+            elif file_type == "video":
+                await context.bot.send_video(chat_id=user_id, video=file)
+            elif file_type == "audio":
+                await context.bot.send_audio(chat_id=user_id, audio=file)
+            else:
+                await context.bot.send_document(chat_id=user_id, document=file)
+    except FileNotFoundError:
+        logger.error(f"Файл не найден: {file_path}")
+        await context.bot.send_message(chat_id=user_id, text=f"Файл не найден: {file_path}")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке файла {file_path}: {e}")
+        await context.bot.send_message(chat_id=user_id, text=f"Ошибка при отправке файла: {e}")
 
 
 # Qwen 15 марта утром строго без conn: sqlite3.Connection, cursor: sqlite3.Cursor,
@@ -439,54 +500,58 @@ async def process_lesson(user_id, lesson_number, active_course_id, context):
         # Получаем файлы для урока
         lesson_files = get_lesson_files(user_id, lesson_number, active_course_id)
 
-        # Отправляем файлы
+        # Создаем задачи для отправки файлов
+        tasks = []
         for file_info in lesson_files:
-            file_path = file_info["path"]
-            file_type = file_info["type"]
-            delay = file_info["delay"]
+            task = asyncio.create_task(send_file_with_delay(user_id, file_info, context))
+            tasks.append(task)
 
-            if delay > 0:
-                # Выбираем случайное сообщение из DELAY_MESSAGES
-                delay_message = random.choice(DELAY_MESSAGES)
-                logger.info(f"Задержка перед отправкой файла {file_path}: {delay} секунд {delay_message=}")
-                await context.bot.send_message(chat_id=user_id, text=delay_message)
-                await asyncio.sleep(delay)
-
-            try:
-                with open(file_path, "rb") as file:
-                    if file_type == "photo":
-                        await context.bot.send_photo(chat_id=user_id, photo=file)
-                    elif file_type == "video":
-                        await context.bot.send_video(chat_id=user_id, video=file)
-                    elif file_type == "audio":
-                        await context.bot.send_audio(chat_id=user_id, audio=file)
-                    else:
-                        await context.bot.send_document(chat_id=user_id, document=file)
-            except FileNotFoundError:
-                logger.error(f"Файл не найден: {file_path}")
-                await context.bot.send_message(chat_id=user_id, text=f"Файл не найден: {file_path}")
-            except Exception as e:
-                logger.error(f"Ошибка при отправке файла {file_path}: {e}")
-                await context.bot.send_message(chat_id=user_id, text=f"Ошибка при отправке файла: {e}")
+        # Ожидаем завершения всех задач
+        await asyncio.gather(*tasks)
 
     except Exception as e:
         logger.error(f"Ошибка при обработке урока: {e}")
         await context.bot.send_message(chat_id=user_id, text="Произошла ошибка при обработке урока.")
 
 
-# Qwen 15 марта утром строго ненадо   conn: sqlite3.Connection, cursor: sqlite3.Cursor,
-def get_lesson_text(lesson_number, active_course_id):
-    """Читает текст урока из файла."""
-    try:
-        lesson_text_path = os.path.join("courses", active_course_id, f"lesson{lesson_number}.txt")
-        with open(lesson_text_path, "r", encoding="utf-8") as file:
-            return file.read()
-    except FileNotFoundError:
-        logger.error(f"Файл урока не найден: ")
-        return None
-    except Exception as e:
-        logger.error(f"Ошибка при чтении текста урока: {e}")
-        return None
+def get_lesson_text(lesson_number, course_id):
+    """Извлекает текст урока из файла и возвращает его вместе с режимом форматирования."""
+    # Список возможных путей к файлам урока
+    lesson_paths = [
+        f"courses/{course_id}/lesson{lesson_number}.md",
+        f"courses/{course_id}/lesson{lesson_number}.html",
+        f"courses/{course_id}/lesson{lesson_number}.txt",
+    ]
+    logger.info(f"Проверяемые пути для урока {lesson_number}: {lesson_paths}")
+
+    # Перебираем пути и ищем существующий файл
+    for path in lesson_paths:
+        if os.path.exists(path):
+            logger.info(f"Файл найден: {path}")
+            try:
+                with open(path, "r", encoding="utf-8") as file:
+                    lesson_text = file.read()
+                    logger.info(f"Файл {path} успешно открыт. lesson_text='{lesson_text[:35]}...'")
+
+                    # Определяем режим форматирования в зависимости от расширения файла
+                    if path.endswith(".html"):
+                        parse_mode = ParseMode.HTML
+                    elif path.endswith(".md"):
+                        #parse_mode = ParseMode.MARKDOWN_V2 # Или ParseMode.MARKDOWN
+                        parse_mode = ParseMode.MARKDOWN
+                        #lesson_text = escape_markdown_v2(lesson_text)  # Экранирует специальные символы
+                    else:
+                        parse_mode = ParseMode.HTML  # По умолчанию для .txt
+
+                    return lesson_text, parse_mode
+
+            except Exception as e:
+                logger.error(f"Ошибка при чтении файла {path}: {e}")
+                return None, None
+
+    # Если файл не найден
+    logger.error(f"Файл с уроком не найден: {lesson_paths}")
+    return None, None
 
 
 # Menu *
@@ -631,8 +696,10 @@ async def start(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update
         # Если пользователь не найден, запрашиваем имя
         if not user_data:
             await update.effective_message.reply_text("Пожалуйста, введите ваше имя:")
-            context.user_data["waiting_for_name"] = True  # Устанавливаем состояние ожидания имени
+            logger.info('запросили имя====================================')
+
             return WAIT_FOR_NAME
+
         else:
             # Проверяем, есть ли активный курс
             cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
@@ -642,9 +709,11 @@ async def start(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update
             if not active_course:
                 await update.effective_message.reply_text("Для начала введите кодовое слово вашего курса:")
                 context.user_data["waiting_for_code"] = True  # Устанавливаем состояние ожидания кодового слова
+                logger.info(f"  start {user_id} - WAIT_FOR_CODE ======================================")
                 return WAIT_FOR_CODE
             else:
                 # Если курсы активированы, показываем главное меню
+                logger.info(f"  start {user_id} - ACTIVE ======================================")
                 await show_main_menu(conn, cursor, update, context)
                 return ACTIVE  # Переходим в состояние ACTIVE
     except Exception as e:
@@ -1843,12 +1912,14 @@ async def show_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: 
         lesson_files = get_lesson_files(user_id, lesson, active_course_id)
         if lesson_files:
             total_files = len(lesson_files)  # Общее количество файлов
+            logger.info(f"lesson_files {total_files} штуков =============================== ")
             for i, file_info in enumerate(lesson_files):
                 file_path = file_info["path"]
                 delay = file_info["delay"]
                 file_type = file_info["type"]
 
                 if delay > 0:
+                    logger.info(f"на  {file_path} задержка {delay}  asincio.sleep =============================== ")
                     await asyncio.sleep(delay)
 
                 try:
@@ -1956,55 +2027,52 @@ async def show_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: 
             await update.message.reply_text("Ошибка при получении материалов урока. Попробуйте позже.")
 
 
-# Функция для получения файлов урока ненадо
+# Функция для получения файлов урока
 def get_lesson_files(user_id, lesson_number, course_id):
-    """Получает список файлов урока (аудио, видео, изображения) с задержками."""
-    logger.info(f"  get_lesson_files {user_id} - {lesson_number=}")
+    """Извлекает список файлов урока."""
+    files = []
+    directory = f"courses/{course_id}"  # Укажите правильный путь к директории с файлами
+
     try:
-        # Убедимся, что lesson_number - это целое число
-        lesson_number = int(lesson_number)
-        lesson_dir = f"courses/{course_id}/"
-        files = []
+        for filename in os.listdir(directory):
+            if filename.startswith(f"lesson{lesson_number}_") and not filename.endswith(".html") and not filename.endswith(".txt") and not filename.endswith(".md"):
+                file_path = os.path.join(directory, filename)
+                mime_type, _ = mimetypes.guess_type(file_path)
+                file_type = "document"  # Тип по умолчанию
+                delay = 0  # Задержка по умолчанию
 
-        for filename in os.listdir(lesson_dir):
-            if (
-                filename.startswith(f"lesson{lesson_number}")
-                and os.path.isfile(os.path.join(lesson_dir, filename))
-                and not filename.endswith(".txt")
-            ):
-
-                file_path = os.path.join(lesson_dir, filename)
-                match = DELAY_PATTERN.search(filename)
-                delay = 0
-                if match:
-                    delay_value = int(match.group(1))
-                    delay_unit = match.group(2)
-                    if delay_unit in ("min", "m"):
-                        delay = delay_value * 60  # minutes to seconds
-                    elif delay_unit in ("hour", "h"):
-                        delay = delay_value * 3600  # hours to seconds
-
-                file_type = "document"  # Default
-
-                if filename.endswith((".jpg", ".jpeg", ".png", ".gif")):
+                # Проверка типа файла на основе MIME-типа
+                if mime_type and mime_type.startswith('image'):
                     file_type = "photo"
-                elif filename.endswith((".mp3", ".wav", ".ogg")):
-                    file_type = "audio"
-                elif filename.endswith((".mp4", ".avi", ".mov")):
+                elif mime_type and mime_type.startswith('video'):
                     file_type = "video"
+                elif mime_type and mime_type.startswith('audio'):
+                    file_type = "audio"
 
-                files.append({"path": file_path, "delay": delay, "type": file_type})
+                # Извлечение информации о задержке из имени файла
+                match = DELAY_PATTERN.search(filename)
+                if match:
+                    delay_value, delay_unit = match.groups()
+                    delay_value = int(delay_value)
 
-        # Сортируем файлы так, чтобы сначала шли файлы без задержки, потом с наименьшей задержкой
-        files.sort(key=lambda x: x["delay"])
-        return files
+                    if delay_unit in ["min", "m"]:
+                        delay = delay_value * 60  # Convert minutes to seconds
+                    elif delay_unit in ["hour", "h"]:
+                        delay = delay_value * 3600  # Convert hours to seconds
+                    else:
+                        delay = delay_value # Default seconds
 
+                files.append({"path": file_path, "type": file_type, "delay": delay})
     except FileNotFoundError:
-        logger.error(f"Папка с файлами урока не найдена: ")
+        logger.error(f"Directory not found: {directory}")
         return []
     except Exception as e:
-        logger.error(f"Ошибка при получении файлов урока: {e}")
+        logger.error(f"Error reading lesson files: {e}")
         return []
+
+    logger.info(f"  get_lesson_files {user_id} - lesson_number={lesson_number}")
+    return files
+
 
 
 # предварительные задания
@@ -2528,28 +2596,6 @@ async def send_support_request_to_admin(conn: sqlite3.Connection, cursor: sqlite
         await update.message.reply_text("Произошла ошибка при отправке запроса. Попробуйте позже.")
 
 
-# Сохраняет имя пользователя и запрашивает кодовое слово *
-async def handle_name(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
-    """Сохраняет имя пользователя и запрашивает кодовое слово."""
-    user_id = update.effective_user.id
-    full_name = update.message.text.strip()
-
-    logger.info(f" 333 4 handle_name {user_id}  {full_name}  ")
-
-    # Сохраняем имя пользователя в базе данных
-    cursor.execute(
-        "INSERT OR REPLACE INTO users (user_id, full_name) VALUES (?, ?)",
-        (user_id, full_name),
-    )
-    conn.commit()
-
-    # Устанавливаем состояние ожидания кодового слова
-    context.user_data["waiting_for_code"] = True
-
-    await update.message.reply_text(f"Отлично, {full_name}! Теперь введите кодовое слово для активации курса.")
-    return WAIT_FOR_CODE
-
-
 def add_tokens(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int, amount: int, reason: str):
     """Начисляет жетоны пользователю."""
     try:
@@ -2882,21 +2928,6 @@ def parse_delay_from_filename(conn: sqlite3.Connection, cursor: sqlite3.Cursor, 
     elif unit == "h":  # часы
         return value * 3600
     return None
-
-
-async def send_file_with_delay(conn: sqlite3.Connection, cursor: sqlite3.Cursor, context: CallbackContext):
-    """
-    Отправляет файл с задержкой.
-    """
-    job_data = context.job.data
-    chat_id = job_data["chat_id"]
-    file_path = job_data["file_path"]
-    file_name = job_data["file_name"]
-
-    try:
-        await send_file(conn, cursor, context.bot, chat_id, file_path, file_name)
-    except Exception as e:
-        logger.error(f"Ошибка при отправке файла с задержкой: {e}")
 
 
 async def send_file(conn: sqlite3.Connection, cursor: sqlite3.Cursor, bot, chat_id, file_path, file_name):
@@ -3638,7 +3669,7 @@ async def get_next_lesson_time(conn: sqlite3.Connection, cursor: sqlite3.Cursor,
 
 def setup_admin_commands(application):
     """Настраивает команды администратора."""
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("bot_db.sqlite")
     cursor = conn.cursor()
     application.add_handler(CommandHandler("stats", lambda update, context: show_stats(conn, cursor, update, context)))
     application.add_handler(CallbackQueryHandler(lambda update, context: admin_approve_purchase(conn, cursor, update, context), pattern="^admin_approve_purchase_"))
@@ -3649,7 +3680,7 @@ def setup_admin_commands(application):
 
 def setup_user_commands(application):
     """Настраивает команды пользователя."""
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("bot_db.sqlite")
     cursor = conn.cursor()
     application.add_handler(CommandHandler("start", lambda update, context: start(conn, cursor, update, context)))
     application.add_handler(CommandHandler("menu", lambda update, context: show_main_menu(conn, cursor, update, context)))
@@ -3679,13 +3710,7 @@ def init_lootboxes(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
     except sqlite3.Error as e:
         logger.error(f"Ошибка при инициализации таблицы lootboxes: {e}")
 
-
-def main():
-    # Создание таблиц
-    # Инициализация БД
-    conn = sqlite3.connect("bot_db.sqlite", check_same_thread=False)
-    cursor = conn.cursor()
-
+def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
     try:
         cursor.executescript(
             """
@@ -3777,9 +3802,21 @@ def main():
             """
         )
         conn.commit()
-        logger.info("База данных успешно создана.")
+        logger.info("База данных успешно создана/сохранена.")
     except sqlite3.Error as e:
         logger.error(f"Ошибка при создании базы данных: {e}")
+
+
+async def cancel(conn, cursor, update, context):
+    await update.message.reply_text("Разговор завершён.")
+    return ConversationHandler.END
+
+
+def main():
+    conn = sqlite3.connect("bot_db.sqlite")
+    cursor = conn.cursor()
+
+    create_all_tables(conn, cursor)
 
     with conn:
         for admin_id in ADMIN_IDS:
@@ -3798,7 +3835,7 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", lambda update, context: start(conn, cursor, update, context) ) ],
         states={
-            WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: handle_user_info(conn, cursor, update, context))],
+            WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: handle_user_info(conn, cursor, update, context)),],
             WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: handle_code_words(conn, cursor, update, context))],
             ACTIVE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND,
@@ -3812,6 +3849,7 @@ def main():
                                      pattern=r"^approve_homework_\d+_\d+$"),
                 CommandHandler("self_approve",
                                lambda update, context: self_approve_homework(conn, cursor, update, context)),  ],
+            COURSE_SETTINGS:[ CallbackQueryHandler(lambda update, context: show_course_settings(conn, cursor, update, context)),],
             WAIT_FOR_SUPPORT_TEXT: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND | filters.PHOTO,
@@ -3830,10 +3868,12 @@ def main():
                 MessageHandler(filters.CONTACT, lambda update, context: process_phone_number(conn, cursor, update, context))
             ],
         },
-        fallbacks=[],
+
+        fallbacks=[CommandHandler("cancel", lambda update, context: cancel(conn, cursor, update, context))],
         persistent=True,  # Включаем персистентность
         name="my_conversation",
         allow_reentry=True,
+
     )
     application.add_handler(conv_handler)
 
@@ -3851,9 +3891,7 @@ def main():
     application.job_queue.run_repeating(send_reminders_wrapper, interval=60, first=10)  # Проверка каждую минуту
 
     application.add_handler(CommandHandler("reminders", lambda update, context: reminders(conn, cursor, update, context)))
-
     application.add_handler(CommandHandler("set_morning", lambda update, context: set_morning(conn, cursor, update, context)))
-
     application.add_handler(CommandHandler("set_evening", lambda update, context: set_evening(conn, cursor, update, context)))
     application.add_handler(
         CommandHandler("disable_reminders", lambda update, context: disable_reminders(conn, cursor, update, context))
@@ -3862,10 +3900,13 @@ def main():
 
     application.add_handler(CallbackQueryHandler(lambda update, context: button_handler(conn, cursor, update, context)))
 
+    # Middleware для логирования всех сообщений
+    application.add_handler(MessageHandler(filters.ALL, logging_middleware))
     # Start the scheduler
     scheduler.start()
 
     application.run_polling()
+    conn.close()
 
 
 if __name__ == "__main__":
