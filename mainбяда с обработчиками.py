@@ -56,14 +56,8 @@ class Course:
         return f"Course(id={self.course_id}, name={self.course_name}, type={self.course_type}, code={self.code_word}, price_rub={self.price_rub}, price_tokens={self.price_tokens})"
 
 # Настройка логирования
-
-class CustomFormatter(logging.Formatter):
-    def formatTime(self, record, datefmt=None):
-        full_time = super().formatTime(record, datefmt)
-        return full_time[-9:]
-
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
     handlers=[
         logging.FileHandler("bot.log", encoding="utf-8"),  # Указываем кодировку utf-8 для файла
@@ -71,15 +65,7 @@ logging.basicConfig(
     ],
 )
 
-# Замена стандартного Formatter на пользовательский
-for handler in logging.getLogger().handlers:
-    handler.setFormatter(CustomFormatter('%(asctime)s - %(levelname)s - %(message)s'))
-
-
 logger = logging.getLogger(__name__)
-
-# Настройка уровня логирования для библиотеки httpx
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
 DATABASE_FILE = "bot_db.sqlite"
 
@@ -170,15 +156,10 @@ def handle_telegram_errors(func):
 # не работает, скотина и всё ломает. Оставлена в назидание
 async def logging_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Логирует все входящие сообщения."""
-    try:
-        user_id = update.effective_user.id
-        state = context.user_data.get('state', 'NO_STATE')
-        logger.info(f"Пользователь {user_id} находится в состоянии {state}")
-        return True  # Продолжаем обработку
-    except Exception as e:
-        logger.error(f"Ошибка в logging_middleware: {e}")
-        return True  # Важно не блокировать обработку
-
+    user_id = update.effective_user.id
+    state = context.user_data.get('state', 'NO_STATE')
+    logger.info(f"Пользователь {user_id} находится в состоянии {state}")
+    return True  # Продолжаем обработку
 
 
 def load_course_data(filename):
@@ -240,7 +221,6 @@ def load_delay_messages(file_path=DELAY_MESSAGES_FILE):
 
 
 # Загрузка фраз в начале программы
-HARD_CODE_DELAY = 5 # секунд. Даже если 5 часов укажешь
 DELAY_MESSAGES = load_delay_messages() # TODO операция "Горец" – в живых должен остаться только один. Один. Виктор Один
 delay_messages = load_delay_messages(DELAY_MESSAGES_FILE)
 
@@ -280,7 +260,7 @@ DEFAULT_LESSON_INTERVAL = 0.1  # интервал уроков 72 часа а н
 
 DEFAULT_LESSON_DELAY_HOURS = 3
 
-logger.info(f"ПОЕХАЛИ {DEFAULT_LESSON_DELAY_HOURS=} {DEFAULT_LESSON_INTERVAL=} время старта {time.strftime('%d/%m/%Y %H:%M:%S')}")
+logger.info(f"{DEFAULT_LESSON_DELAY_HOURS=} {DEFAULT_LESSON_INTERVAL=} время старта {time.strftime('%d/%m/%Y %H:%M:%S')}")
 
 PAYMENT_INFO_FILE = "payment_info.json"
 
@@ -373,6 +353,7 @@ async def handle_error(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update:
 async def handle_user_info(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):  # Добавил conn и cursor
     user_id = update.effective_user.id
     full_name = update.effective_message.text.strip()
+
     # Логирование текущего состояния пользователя
     logger.info(f" handle_user_info {user_id} ============================================")
 
@@ -412,10 +393,6 @@ async def handle_user_info(conn: sqlite3.Connection, cursor: sqlite3.Cursor, upd
         # Успешное сохранение, переход к следующему шагу
         await update.effective_message.reply_text(f"Отлично, {full_name}! Теперь введите кодовое слово для активации курса.")
         return WAIT_FOR_CODE
-    except sqlite3.Error as e:
-        logger.error(f"Ошибка SQLite: {e}")
-        await update.effective_message.reply_text("Произошла ошибка при работе с базой данных. Попробуйте позже.")
-        return WAIT_FOR_NAME
 
     except Exception as e:
         # Обработка ошибок при сохранении имени
@@ -592,8 +569,6 @@ async def get_current_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, u
                 delay_message = random.choice(DELAY_MESSAGES)
                 logger.info(f"Ожидание {delay} секунд перед отправкой файла {file_path}. Сообщение: {delay_message}")
                 await context.bot.send_message(chat_id=user_id, text=delay_message)
-                delay= HARD_CODE_DELAY # todo починить HARD_CODE_DELAY при рефакторинге
-                logger.warning(f"Ожидание стало {delay} секунд. Fix it in beta release ")
                 await asyncio.sleep(delay)
 
             try:
@@ -833,13 +808,12 @@ async def get_available_products(conn: sqlite3.Connection, cursor: sqlite3.Curso
     """Возвращает информацию о доступных продуктах в магазине."""
     #  Здесь надо подгрузить товары из бд
     # 1. Make a database query
-    cursor.execute("SELECT product_name, price FROM products")  # WHERE price <= ? ORDER BY price ASC
-    logger.info(f"  get_available_products  Начало выполнения функции с tokens={tokens}")  # Добавлено логирование
+    cursor.execute("SELECT name, price FROM products")  # WHERE price <= ? ORDER BY price ASC
+
     products = cursor.fetchall()
     if not products:
         return "\nВ магазине пока нет товаров."
 
-    logger.info(f" get_available_products  Найдено {len(products)} товаров.")  # Добавлено логирование
     # 2. Find the cheapest product
     affordable_products = []
     unaffordable_products = []
@@ -869,166 +843,6 @@ async def get_available_products(conn: sqlite3.Connection, cursor: sqlite3.Curso
 
 
 # 16 03 вечер
-@handle_telegram_errors
-async def old_show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
-    user = update.effective_user
-    user_id = user.id
-    logger.info(f" show_main_menu {user} --- ")
-    # 1. Get user's tokens
-    cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
-    tokens_data = cursor.fetchone()
-    tokens = tokens_data[0] if tokens_data else 0
-
-    # 2. Get next bonus information
-    next_bonus_info = await get_next_bonus_info(conn, cursor, user_id)
-
-    # 3. Construct the message
-    message = f"Ваши antCoins: {tokens}\n"
-    message += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
-    message += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
-
-    # 4. Get available products for purchase
-    products_message = await get_available_products(conn, cursor, tokens)
-    message += products_message
-    try:
-        # Get data of course
-        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user.id,))
-        active_course_data = cursor.fetchone()
-        logger.info(f" active_course_data= {active_course_data} ---- ")
-
-        if not active_course_data or not active_course_data[0]:
-            message_text = "Активируйте курс с помощью кодового слова."
-            await safe_reply(update, context, message_text)
-            return ConversationHandler.END
-
-        active_course_id_full = active_course_data[0]
-        # Short name
-        active_course_id = active_course_id_full.split("_")[0]
-        active_tariff = active_course_id_full.split("_")[1] if len(active_course_id_full.split("_")) > 1 else "default"
-
-        # Data of course
-        cursor.execute(
-            """
-            SELECT course_type, progress
-            FROM user_courses
-            WHERE user_id = ? AND course_id = ?
-        """,
-            (user.id, active_course_id_full),
-        )
-        course_data = cursor.fetchone()
-        logger.info(f" course_data= {course_data} ----- ")
-
-        if not course_data:
-            logger.warning(f"Не найден course_type для user_id={user.id} и course_id={active_course_id_full}")
-            course_type, progress = "unknown", 0  # Установите значения по умолчанию
-        else:
-            course_type, progress = course_data
-        logger.info(f" {course_type=} {progress=} ------ ")
-        # Notifications
-        cursor.execute(
-            "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
-            (user.id,),
-        )
-        settings = cursor.fetchone()
-        logger.info(f" {settings=}  ------- ")
-        morning_time = settings[0] if settings and len(settings) > 0 else "Not set"  # CHECK LENGHT
-        evening_time = settings[1] if settings and len(settings) > 1 else "Not set"  # CHECK LENGHT
-
-        # Get username
-        cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user.id,))
-        name_data = cursor.fetchone()
-        logger.info(f" {name_data=}  -------- ")
-
-        if name_data and len(name_data) > 0:
-            full_name = name_data[0]
-        else:
-            full_name = "Пользователь"
-            logger.warning(f"Не найдено имя пользователя {user.id} в базе данных")
-        logger.info(f" {full_name=}  --------- ")
-
-        homework = await get_homework_status_text(conn, cursor, user.id, active_course_id_full)
-
-        logger.info(f" {homework=}  --------- ")
-
-        lesson_files = get_lesson_files(user.id, progress, active_course_id)
-        logger.info(f" {lesson_files=}  --------- ")
-
-        #Удали эту строку.check_last_lesson должна вызываться только при нажатии на кнопку"Текущий урок".
-        #last_lesson = await check_last_lesson(conn, cursor, update, context)
-
-        #logger.info(f" {last_lesson=}  --------- ")
-
-        # Checking if last_lesson None
-        #if last_lesson is None:
-         #   logger.warning("last_lesson is None skipping course completion check. ConversationHandler.END")
-          #  return ConversationHandler.END
-
-        # Checking if end and go to action
-        #if int(progress) >= int(last_lesson): TODO узнавать текущий урок пользователя другим способом
-         #   await course_completion_actions(conn, cursor, update, context)
-          #  return ConversationHandler.END
-
-        # Debug state
-        if context.user_data and context.user_data.get("waiting_for_code"):
-            state_emoji = "🔑"  # Key emoji for 'waiting_for_code' state
-        else:
-            state_emoji = "✅"  # Checkmark for other states
-
-        progress_text = f"Текущий урок: {progress}" if progress else "--"
-        greeting = f"""Приветствую, {full_name.split()[0]}! {state_emoji}
-        Курс: {active_course_id} ({course_type}) {active_tariff}
-        Прогресс: {progress_text}
-        Домашка: {homework}     Для СамоОдобрения введи потом  /self_approve_{progress}"""
-
-        # Make buttons
-        keyboard = [
-            [
-                InlineKeyboardButton("📚 Текущий Урок - повтори всё", callback_data="get_current_lesson"),
-                InlineKeyboardButton("🖼 Галерея ДЗ", callback_data="gallery"),
-            ],
-            [
-                InlineKeyboardButton(
-                    f"⚙ Настройка Курса ⏰({morning_time}, {evening_time})",
-                    callback_data="course_settings",
-                )
-            ],
-            [
-                InlineKeyboardButton("💰 Тарифы и Бонусы <- тут много", callback_data="tariffs"),
-            ],
-            [InlineKeyboardButton("🙋 ПоДдержка", callback_data="support")],
-        ]
-
-        # ADD DYNAMIC BUTTON
-        # Find lesson
-        next_lesson = progress + 1
-
-        # If lesson available add it
-        lessons = get_preliminary_materials(active_course_id, next_lesson)
-        if len(lessons) > 0 and not (homework.startswith("есть")):
-            keyboard.insert(
-                0,
-                [
-                    InlineKeyboardButton(
-                        "🙇🏼Предварительные материалы к след. уроку",
-                        callback_data="preliminary_tasks",
-                    )
-                ],
-            )
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        logger.info(f" pre #Send menu  ---------- ")
-        # Send menu
-        try:
-            await safe_reply(update, context, greeting, reply_markup=reply_markup)
-        except TelegramError as e:
-            logger.error(f"Telegram API error: {e}")
-            await context.bot.send_message(user.id, "Произошла ошибка. Попробуйте позже.")
-
-    except Exception as e:
-        logger.error(f"time {time.strftime('%H:%M:%S')} Error in show_main_menu: {str(e)}")
-        await safe_reply(update, context, "Error display menu. Try later.")
-        return ConversationHandler.END
-
 @handle_telegram_errors
 async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     user = update.effective_user
@@ -1113,9 +927,19 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         lesson_files = get_lesson_files(user.id, progress, active_course_id)
         logger.info(f" {lesson_files=}  --------- ")
 
-        # Removing this as it should happen only on "lesson" button press
-        # last_lesson = await check_last_lesson(conn, cursor, update, context)
-        # logger.info(f" {last_lesson=}  --------- ")
+        last_lesson = await check_last_lesson(conn, cursor, update, context)
+
+        logger.info(f" {last_lesson=}  --------- ")
+
+        # Checking if last_lesson None
+        if last_lesson is None:
+            logger.warning("last_lesson is None skipping course completion check. ConversationHandler.END")
+            return ConversationHandler.END
+
+        # Checking if end and go to action
+        if int(progress) >= int(last_lesson):
+            await course_completion_actions(conn, cursor, update, context)
+            return ConversationHandler.END
 
         # Debug state
         if context.user_data and context.user_data.get("waiting_for_code"):
@@ -1179,97 +1003,6 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         return ConversationHandler.END
 
 
-# формирование сообщения 17-03 вечер perplexity
-async def get_main_menu_message(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user: Update.effective_user) -> str:
-    """Формирует текст сообщения для главного меню."""
-    user_id = user.id
-
-    try:
-        # 1. Get user's tokens
-        cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
-        tokens_data = cursor.fetchone()
-        tokens = tokens_data[0] if tokens_data else 0
-
-        # 2. Get next bonus information
-        next_bonus_info = await get_next_bonus_info(conn, cursor, user_id)
-
-        # 3. Construct the message
-        message = f"Ваши antCoins: {tokens}\n"
-        message += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
-        message += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
-
-        # 4. Get available products for purchase
-        products_message = await get_available_products(conn, cursor, tokens)
-        message += products_message
-
-        # Get data of course
-        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user.id,))
-        active_course_data = cursor.fetchone()
-        logger.info(f" active_course_data= {active_course_data} ---- ")
-
-        if not active_course_data or not active_course_data[0]:
-            return "Активируйте курс с помощью кодового слова."
-
-        active_course_id_full = active_course_data[0]
-        # Short name
-        active_course_id = active_course_id_full.split("_")[0]
-        active_tariff = active_course_id_full.split("_")[1] if len(active_course_id_full.split("_")) > 1 else "default"
-
-        # Data of course
-        cursor.execute(
-            """
-            SELECT course_type, progress
-            FROM user_courses
-            WHERE user_id = ? AND course_id = ?
-        """,
-            (user.id, active_course_id_full),
-        )
-        course_data = cursor.fetchone()
-        logger.info(f" course_data= {course_data} ----- ")
-
-        if not course_data:
-            logger.warning(f"Не найден course_type для user_id={user.id} и course_id={active_course_id_full}")
-            course_type, progress = "unknown", 0  # Установите значения по умолчанию
-        else:
-            course_type, progress = course_data
-        logger.info(f" {course_type=} {progress=} ------ ")
-        # Notifications
-        cursor.execute(
-            "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
-            (user.id,),
-        )
-        settings = cursor.fetchone()
-        logger.info(f" {settings=}  ------- ")
-        morning_time = settings[0] if settings and len(settings) > 0 else "Not set"  # CHECK LENGHT
-        evening_time = settings[1] if settings and len(settings) > 1 else "Not set"  # CHECK LENGHT
-
-        # Get username
-        cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user.id,))
-        name_data = cursor.fetchone()
-        logger.info(f" {name_data=}  -------- ")
-
-        if name_data and len(name_data) > 0:
-            full_name = name_data[0]
-        else:
-            full_name = "Пользователь"
-            logger.warning(f"Не найдено имя пользователя {user.id} в базе данных")
-        logger.info(f" {full_name=}  --------- ")
-
-        homework = await get_homework_status_text(conn, cursor, user.id, active_course_id_full)
-        logger.info(f" {homework=}  --------- ")
-
-        message = f"Приветствую, {full_name}! ✅\n"
-        message += f"        Курс: {active_course_id} \n"  # TODO получить course_name из course_id
-        message += homework
-
-        return message
-
-    except Exception as e:
-        logger.error(f" Ошибка при формировании сообщения для главного меню: {e}")
-        return "Произошла ошибка. Попробуйте позже."
-
-
-
 @handle_telegram_errors
 async def start(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """
@@ -1279,7 +1012,6 @@ async def start(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update
     try:
         user_id = update.effective_user.id
         logger.info(f"Начало разговора с пользователем {user_id} =================================================================")
-        logger.info(f"Пользователь {user_id} запустил команду /start")
 
         # Проверка существования пользователя в базе данных
         cursor.execute(
@@ -3063,11 +2795,15 @@ async def get_random_homework(conn: sqlite3.Connection, cursor: sqlite3.Cursor, 
 
 
 
+
+
+
 async def button_handler(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Handles button presses."""
     user_id = update.effective_user.id
-    logger.info(f"  -77 button_handler - {user_id}")
+    logger.info(f"{user_id} - button_handler")
 
+    # Обрабатывает нажатия на кнопки все
     button_handlers = {
         "get_current_lesson": lambda update, context: get_current_lesson(conn, cursor, update, context),
         "gallery": show_gallery,  # Если show_gallery не требует conn и cursor
@@ -3077,116 +2813,66 @@ async def button_handler(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         "tariffs": show_tariffs,  # Если show_tariffs не требует conn и cursor
         "course_settings": show_course_settings,  # Если show_course_settings не требует conn и cursor
         "statistics": show_statistics,  # Если show_statistics не требует conn и cursor
-        "preliminary_tasks": lambda update, context: send_preliminary_material(conn, cursor, update, context),
+        "preliminary_tasks": send_preliminary_material,  # Если send_preliminary_material не требует conn и cursor
     }
+
 
     try:
         if update.callback_query:
             query = update.callback_query
-            callback_data = query.data
-            logger.info(f" 77 button_handler  Нажата кнопка {callback_data}")
             await query.answer()
-
-            # Добавляем вызов check_last_lesson, когда нажата кнопка "Текущий урок"
-            if callback_data == get_current_lesson:
-                await check_last_lesson(conn, cursor, update, context)
-                # Получаем текущий урок после проверки последнего урока
-                await get_current_lesson(conn, cursor, update, context)
-            elif callback_data in button_handlers:
-                await button_handlers[callback_data](update, context)
-            else:
-                await safe_reply(update, context, "Неизвестная команда.")
+            data = query.data
         else:
-            await safe_reply(update, context, "Эта функция доступна только при нажатии на кнопку.")
+            logger.warning("Эта функция работает только через CallbackQuery.")
+            await safe_reply(update, context, "Эта функция работает только через CallbackQuery.")
+            return
+
+        # Tariff selection
+        if data.startswith("tariff_"):
+            tariff_id = data.split("_", 1)[1]
+            logger.info(f"Handling tariff selection: {tariff_id}")
+            await handle_tariff_selection(conn, cursor, update, context, tariff_id)
+            return
+
+        # Buy tariff
+        if data.startswith("buy_tariff_"):
+            tariff_id = data.split("_", 2)[2]
+            logger.info(f"Handling buy tariff: {tariff_id}")
+            await handle_buy_tariff(conn, cursor, update, context, tariff_id)
+            return
+
+        # Go to payment
+        if data.startswith("go_to_payment_"):
+            tariff_id = data.split("_", 2)[2]
+            logger.info(f"Handling go to payment: {tariff_id}")
+            await handle_go_to_payment(conn, cursor, update, context, tariff_id)
+            return
+
+        # Check payment
+        if data.startswith("check_payment_"):
+            try:
+                tariff_id = data.split("_", 2)[1]
+                logger.info(f"Handling check payment: {tariff_id}")
+            except IndexError:
+                logger.error(f"Failed to extract tariff_id from data: {data}")
+                await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+                return
+            await handle_check_payment(conn, cursor, update, context, tariff_id)
+            return
+
+        # Other button handlers
+        if data in button_handlers:
+            handler = button_handlers[data]
+            await handler(update, context)
+            return
+
+        # Unknown command
+        await safe_reply(update, context, "Unknown command")
 
     except Exception as e:
-        logger.error(f" Ошибка в button_handler: {e}")
+        logger.error(f"Error: {e}")
         await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
 
-
-
-# async def old_button_handler(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
-#     """Handles button presses."""
-#     user_id = update.effective_user.id
-#     logger.info(f"  -77 button_handler - {user_id}")
-#
-#     # Обрабатывает нажатия на кнопки все
-#
-#     button_handlers = {
-#         "get_current_lesson": lambda update, context: get_current_lesson(conn, cursor, update, context),
-#         "gallery": show_gallery,
-#         "gallery_next": lambda update, context: get_random_homework(conn, cursor, update, context),
-#         "menu_back": lambda update, context: show_main_menu(conn, cursor, update, context),
-#         "support": show_support,
-#         "tariffs": show_tariffs,
-#         "course_settings": show_course_settings,
-#         "statistics": show_statistics,
-#         "preliminary_tasks": send_preliminary_material,
-#     }
-#
-#
-#     try:
-#         if update.callback_query:
-#             query = update.callback_query
-#             if callback_data == get_current_lesson:  # callback_data для текущего урока
-#                 await check_last_lesson(conn, cursor, update, context)
-#
-#
-#
-#             logger.info(" 77 button_handler  Нажата кнопка {query}")  # Добавлено логирование
-#             await query.answer()
-#             data = query.data
-#         else:
-#             logger.warning("Эта функция работает только через CallbackQuery.")
-#             await safe_reply(update, context, "Эта функция работает только через CallbackQuery.")
-#             return
-#
-#         # Tariff selection
-#         if data.startswith("tariff_"):
-#             tariff_id = data.split("_", 1)[1]
-#             logger.info(f"Handling tariff selection: {tariff_id}")
-#             await handle_tariff_selection(conn, cursor, update, context, tariff_id)
-#             return
-#
-#         # Buy tariff
-#         if data.startswith("buy_tariff_"):
-#             tariff_id = data.split("_", 2)[2]
-#             logger.info(f"Handling buy tariff: {tariff_id}")
-#             await handle_buy_tariff(conn, cursor, update, context, tariff_id)
-#             return
-#
-#         # Go to payment
-#         if data.startswith("go_to_payment_"):
-#             tariff_id = data.split("_", 2)[2]
-#             logger.info(f"Handling go to payment: {tariff_id}")
-#             await handle_go_to_payment(conn, cursor, update, context, tariff_id)
-#             return
-#
-#         # Check payment
-#         if data.startswith("check_payment_"):
-#             try:
-#                 tariff_id = data.split("_", 2)[1]
-#                 logger.info(f"Handling check payment: {tariff_id}")
-#             except IndexError:
-#                 logger.error(f"Failed to extract tariff_id from data: {data}")
-#                 await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
-#                 return
-#             await handle_check_payment(conn, cursor, update, context, tariff_id)
-#             return
-#
-#         # Other button handlers
-#         if data in button_handlers:
-#             handler = button_handlers[data]
-#             await handler(update, context)
-#             return
-#
-#         # Unknown command
-#         await safe_reply(update, context, "Unknown command")
-#
-#     except Exception as e:
-#         logger.error(f"Error: {e}")
-#         await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
-#
 
 
 
@@ -4362,11 +4048,11 @@ async def check_last_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, up
         if update.callback_query:
             query = update.callback_query
             await query.answer()
-            logger.info("17 check_last_lesson: Callback query received.")
+            logger.info("check_last_lesson: Callback query received.")
         else:
             query = None
-            logger.warning("17 check_last_lesson: This function should be called from a callback query.")
-            await safe_reply(update, context, "17 This function can only be used via button press.") # added context
+            logger.warning("check_last_lesson: This function should be called from a callback query.")
+            await safe_reply(update, context, "This function can only be used via button press.") # added context
             return None
 
         # Get active_course_id from users
@@ -4375,11 +4061,11 @@ async def check_last_lesson(conn: sqlite3.Connection, cursor: sqlite3.Cursor, up
 
         if not active_course_data or not active_course_data[0]:
             await safe_reply(update, context, "У вас не активирован курс. Пожалуйста, введите кодовое слово.")
-            logger.info("17 check_last_lesson: No active course found for user.")
+            logger.info("check_last_lesson: No active course found for user.")
             return None
 
         active_course_id = active_course_data[0].split("_")[0]
-        logger.info(f"17check_last_lesson: active_course_id='{active_course_id}'")
+        logger.info(f"check_last_lesson: active_course_id='{active_course_id}'")
 
         # Get the number of available lesson files for the course
         count = 0
@@ -5223,12 +4909,6 @@ def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
                 show_example_homework BOOLEAN DEFAULT 1,
                 FOREIGN KEY(user_id) REFERENCES users(user_id)
             );
-            
-            CREATE TABLE IF NOT EXISTS products (
-                product_id INTEGER PRIMARY KEY,
-                product_name TEXT NOT NULL,
-                price INTEGER NOT NULL
-            );
 
             CREATE TABLE IF NOT EXISTS user_courses (
                 user_id INTEGER,
@@ -5266,55 +4946,102 @@ def create_connection(db_file=DATABASE_FILE):
 
 
 def main():
+    """Start the bot."""
 
     # Database connection
     conn, cursor = create_connection()
     create_all_tables(conn, cursor)
+
     # Job scheduler
     scheduler = AsyncIOScheduler()
-
+    # Create the Application and pass it your bot's token.
     application = ApplicationBuilder().token(TOKEN).persistence(persistence).build()
 
-    # Подключение middleware - ненадо. он всё ломает с гарантией
-   # application.add_handler(MessageHandler(filters.ALL, logging_middleware))
+    # Load existing scheduled lessons from the database
+    logger.info("до morning_time")
+    cursor.execute("SELECT user_id, morning_time, evening_time FROM users")
+    users = cursor.fetchall()
+    logger.info("после morning_time")
+    for user_id, morning_time, evening_time in users:
+        if morning_time:
+            m_hour, m_minute = map(int, morning_time.split(':'))
+            morning_datetime = datetime.now().replace(hour=m_hour, minute=m_minute, second=0, microsecond=0)
+            add_user_to_scheduler(conn, cursor, user_id, morning_datetime, application.job_queue, scheduler)
 
-    # Лямбда-функции для передачи conn и cursor
-    start_handler = lambda update, context: start(conn, cursor, update, context)
-    handle_user_info_handler = lambda update, context: handle_user_info(conn, cursor, update, context)
-    handle_code_words_handler = lambda update, context: handle_code_words(conn, cursor, update, context)
-    button_handler_lambda = lambda update, context: button_handler(conn, cursor, update, context)
-    get_support_text_handler = lambda update, context: get_support_text(conn, cursor, update, context)
+        # if evening_time:
+        #     e_hour, e_minute = map(int, evening_time.split(':'))
+        #     evening_datetime = datetime.now().replace(hour=e_hour, minute=e_minute, second=0, microsecond=0)
+        #     add_user_to_scheduler(conn, cursor, user_id, evening_datetime, application.job_queue, scheduler)
 
-    # ConversationHandler
+
+    # Add command handlers
+    application.add_handler(CommandHandler("start", lambda update, context: start(conn, cursor, update, context)))
+    application.add_handler(CommandHandler(CMD_LESSON, lambda update, context: lesson_command(conn, cursor, update, context)))
+    application.add_handler(CommandHandler(CMD_INFO, lambda update, context: info_command(conn, cursor, update, context)))
+    application.add_handler(CommandHandler(CMD_HOMEWORK, lambda update, context: homework_command(conn, cursor, update, context)))
+    application.add_handler(CommandHandler(CMD_ADMINS, lambda update, context: admins_command(conn, cursor, update, context)))
+    logger.info("перед  conv_handler ========================")
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start_handler)],
+        entry_points=[CommandHandler("start", lambda update, context: start(conn, cursor, update, context))],
         states={
-            WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_info_handler)],
-            WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code_words_handler)],
+            WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND,
+                                           lambda update, context: handle_user_info(conn, cursor, update, context))],
+            WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND,
+                                           lambda update, context: handle_code_words(conn, cursor, update, context))],
             ACTIVE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: handle_text_message(conn, cursor, update, context)),
-                CallbackQueryHandler(button_handler_lambda),
-                MessageHandler(filters.PHOTO, lambda update, context: handle_homework_submission(conn, cursor, update, context)),
-                MessageHandler(filters.Document.IMAGE, lambda update, context: handle_homework_submission(conn, cursor, update, context)),
-            ],
+                MessageHandler(filters.TEXT & ~filters.COMMAND,
+                               lambda update, context: handle_text_message(conn, cursor, update, context)),
+                CallbackQueryHandler(lambda update, context: button_handler(conn, cursor, update, context)),
+                MessageHandler(filters.Document.IMAGE | filters.PHOTO,
+                               lambda update, context: handle_homework_submission(conn, cursor, update, context)),
+                CallbackQueryHandler(lambda update, context: self_approve_homework(conn, cursor, update, context),
+                                     pattern=r"^self_approve_\d+$"),
+                CallbackQueryHandler(lambda update, context: approve_homework(conn, cursor, update, context),
+                                     pattern=r"^approve_homework_\d+_\d+$"),
+                CommandHandler("self_approve",
+                               lambda update, context: self_approve_homework(conn, cursor, update, context)), ],
+            COURSE_SETTINGS: [
+                CallbackQueryHandler(lambda update, context: show_course_settings(conn, cursor, update, context))],
             WAIT_FOR_SUPPORT_TEXT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND | filters.PHOTO, get_support_text_handler)
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND | filters.PHOTO,
+                    lambda update, context: get_support_text(conn, cursor, update, context),
+                )
             ],
-            WAIT_FOR_SELFIE: [MessageHandler(filters.PHOTO, lambda update, context: process_selfie(conn, cursor, update, context))],
-            WAIT_FOR_DESCRIPTION: [MessageHandler(filters.TEXT, lambda update, context: process_description(conn, cursor, update, context))],
-            WAIT_FOR_CHECK: [MessageHandler(filters.PHOTO, lambda update, context: process_check(conn, cursor, update, context))],
-            WAIT_FOR_GIFT_USER_ID: [MessageHandler(filters.TEXT, lambda update, context: process_gift_user_id(conn, cursor, update, context))],
-            WAIT_FOR_PHONE_NUMBER: [MessageHandler(filters.CONTACT, lambda update, context: process_phone_number(conn, cursor, update, context))],
+            WAIT_FOR_SELFIE: [
+                MessageHandler(filters.PHOTO, lambda update, context: process_selfie(conn, cursor, update, context))],
+            WAIT_FOR_DESCRIPTION: [
+                MessageHandler(filters.TEXT, lambda update, context: process_description(conn, cursor, update, context))
+            ],
+            WAIT_FOR_CHECK: [
+                MessageHandler(filters.PHOTO, lambda update, context: process_check(conn, cursor, update, context))],
+            WAIT_FOR_GIFT_USER_ID: [
+                MessageHandler(filters.TEXT,
+                               lambda update, context: process_gift_user_id(conn, cursor, update, context))
+            ],
+            WAIT_FOR_PHONE_NUMBER: [
+                MessageHandler(filters.CONTACT,
+                               lambda update, context: process_phone_number(conn, cursor, update, context))
+            ],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", lambda update, context: cancel(conn, cursor, update, context))],
+        persistent=True,  # Включаем персистентность
         name="my_conversation",
         allow_reentry=True,
     )
     application.add_handler(conv_handler)
 
-    # Команды вне ConversationHandler (с передачей conn и cursor)
-    application.add_handler(CommandHandler("start", start_handler))  # Добавлено здесь!
-    application.add_handler(CommandHandler("menu", lambda update, context: show_main_menu(conn, cursor, update, context)))
+    setup_user_commands(application, conn, cursor)
+    setup_admin_commands(application, conn, cursor)
+
+    # Обработчик для кнопок предварительных материалов
+    application.add_handler(
+        CallbackQueryHandler(
+            lambda update, context: send_preliminary_material(conn, cursor, update, context),
+            pattern="^preliminary_",
+        )
+    )
+
     application.add_handler(CommandHandler("reminders", lambda update, context: reminders(conn, cursor, update, context)))
     application.add_handler(CommandHandler("set_morning", lambda update, context: set_morning(conn, cursor, update, context)))
     application.add_handler(CommandHandler("set_evening", lambda update, context: set_evening(conn, cursor, update, context)))
@@ -5323,11 +5050,14 @@ def main():
     )
     application.add_handler(CommandHandler("stats", lambda update, context: stats(conn, cursor, update, context)))
 
-    # Обработчик CallbackQuery
-    application.add_handler(CallbackQueryHandler(button_handler_lambda))
+    application.add_handler(CallbackQueryHandler(lambda update, context: button_handler(conn, cursor, update, context)))
 
-    #Обработчик ошибок
-    application.add_error_handler(lambda update, context, error: handle_error(conn, cursor, update, context, error))
+    # Add error handler
+    application.add_handler(MessageHandler(filters.ALL, lambda update, context: unknown(update, context)))
+
+    # Error handler
+    application.add_error_handler(
+        lambda update, context, error: handle_error(conn, cursor, update, context, error))
 
     scheduler.start()
 
