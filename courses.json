@@ -1,44 +1,59 @@
 [
   {
     "course_id": "femininity_self_check",
-    "course_name": "Femininity",
+    "course_name": "Женственность",
     "course_type": "main",
-    "tariff": "self_check",
-    "code_word": "роза"
+    "code_word": "роза",
+    "price_rub": 1500
   },
   {
     "course_id": "femininity_admin_check",
-    "course_name": "Femininity",
+    "course_name": "Женственность",
     "course_type": "main",
-    "tariff": "admin_check",
-    "code_word": "фиалка"
+    "code_word": "фиалка",
+    "price_rub": 3000
   },
   {
     "course_id": "femininity_premium",
-    "course_name": "Femininity",
+    "course_name": "Женственность",
     "course_type": "main",
-    "tariff": "premium",
-    "code_word": "лепесток"
+    "code_word": "лепесток",
+    "price_rub": 5000
   },
   {
     "course_id": "autogenic_self_check",
-    "course_name": "Autogenic",
+    "course_name": "Autogenic Self Check",
     "course_type": "auxiliary",
-    "tariff": "self_check",
-    "code_word": "тыква"
+    "code_word": "тыква",
+    "price_rub": 1000
   },
   {
     "course_id": "autogenic_admin_check",
-    "course_name": "Autogenic",
+    "course_name": "Autogenic Admin Check",
     "course_type": "auxiliary",
-    "tariff": "admin_check",
-    "code_word": "слива"
+    "code_word": "слива",
+    "price_rub": 2000
   },
   {
     "course_id": "autogenic_premium",
-    "course_name": "Autogenic",
+    "course_name": "Autogenic Premium",
     "course_type": "auxiliary",
-    "tariff": "premium",
-    "code_word": "молоко"
+    "code_word": "молоко",
+    "price_rub": 4000
+  },
+  {
+    "course_id": "bonus_course",
+    "course_name": "Exclusive Bonus Course",
+    "course_type": "bonus",
+    "code_word": "бонус",
+    "price_tokens": 100,
+    "price_rub": 7500
+  },
+    {
+    "course_id": "bonus_course_new",
+    "course_name": "Another Exclusive Bonus Course",
+    "course_type": "bonus",
+    "code_word": "бонус2",
+    "price_tokens": 200
   }
 ]
