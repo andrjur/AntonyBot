@@ -44,16 +44,16 @@ CMD_ADMINS = "admins"
 
 
 class Course:
-    def __init__(self, course_id, course_name, course_type, tariff, code_word):
+    def __init__(self, course_id, course_name, course_type, code_word, price_rub=None, price_tokens=None):
         self.course_id = course_id
         self.course_name = course_name
         self.course_type = course_type
-        self.tariff = tariff
         self.code_word = code_word
+        self.price_rub = price_rub
+        self.price_tokens = price_tokens
 
     def __str__(self):
-        return f"Course(id={self.course_id}, name={self.course_name}, type={self.course_type}, tariff={self.tariff}, code={self.code_word})"
-
+        return f"Course(id={self.course_id}, name={self.course_name}, type={self.course_type}, code={self.code_word}, price_rub={self.price_rub}, price_tokens={self.price_tokens})"
 
 # Настройка логирования
 logging.basicConfig(
@@ -66,6 +66,9 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+DATABASE_FILE = "bot_db.sqlite"
+
 TARIFFS_FILE = "tariffs.json"
 
 COURSE_DATA_FILE = "courses.json"
@@ -80,6 +83,8 @@ GOLD_COIN = "🟡" # Gold coin
 PLATINUM_COIN = "💎" # Platinum Coin
 
 TOKEN_TO_RUB_RATE = 100  # 1 token = 100 rubles
+
+
 
 def load_bonuses():
     """Загружает настройки бонусов из файла."""
@@ -156,13 +161,33 @@ async def logging_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE)
     logger.info(f"Пользователь {user_id} находится в состоянии {state}")
     return True  # Продолжаем обработку
 
+
 def load_course_data(filename):
     """Загружает данные о курсах из JSON файла."""
     try:
         with open(filename, "r", encoding="utf-8") as f:
             data = json.load(f)
-            courses = [Course(**course_info) for course_info in data]
+            courses = []
             logger.info(f"Файл с данными о курсах: {filename}")
+            logger.info(f"========курсы {data}")
+            for course_info in data:
+                try:
+                    course = Course(
+                        course_id=course_info.get("course_id"),
+                        course_name=course_info.get("course_name"),
+                        course_type=course_info.get("course_type"),
+                        code_word=course_info.get("code_word"),
+                        price_rub=course_info.get("price_rub"),
+                        price_tokens=course_info.get("price_tokens"),
+                    )
+                    courses.append(course)
+
+                except TypeError as e:
+                    logger.error(f"Ошибка при создании экземпляра Course: {e}, данные: {course_info}")
+                except Exception as e:
+                    logger.error(f"Неизвестная ошибка при создании экземпляра Course: {e}, данные: {course_info}")
+
+            logger.info(f"346=============КУРсЫ {courses}")
             return {course.code_word: course for course in courses}
     except FileNotFoundError:
         logger.error(f"Файл с данными о курсах не найден: {filename}")
@@ -173,7 +198,6 @@ def load_course_data(filename):
     except Exception as e:
         logger.error(f"Ошибка при загрузке данных о курсах: {e}")
         return {}
-
 
 COURSE_DATA = load_course_data(COURSE_DATA_FILE)
 
@@ -326,9 +350,7 @@ async def handle_error(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update:
 
 
 # получение имени и проверка *
-async def handle_user_info(
-    conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext
-):  # Добавил conn и cursor
+async def handle_user_info(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):  # Добавил conn и cursor
     user_id = update.effective_user.id
     full_name = update.effective_message.text.strip()
 
@@ -389,7 +411,9 @@ async def handle_code_words(
     user_code = update.message.text.strip()
 
     # Логирование текущего состояния пользователя
-    logger.info(f" handle_code_words {user_id} - Current state")
+    logger.info(f" handle_code_words {user_id}   {user_code}")
+
+    logger.info(f"345 COURSE_DATA {COURSE_DATA}   ")
 
     if user_code in COURSE_DATA:
         # Активируем курс
@@ -2101,7 +2125,7 @@ async def self_approve_homework(conn: sqlite3.Connection, cursor: sqlite3.Cursor
         cursor.execute(
             """
             UPDATE homeworks
-            SET status = 'approved', approval_time = CURRENT_TIMESTAMP
+            SET status = 'approved', approval_time = (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
             WHERE hw_id = ? AND user_id = ?
         """,
             (hw_id, user_id),
@@ -2410,9 +2434,9 @@ def get_lesson_files(user_id, lesson_number, course_id):
     directory = f"courses/{course_id}"  # Укажите правильный путь к директории с файлами
     logger.info(f"get_lesson_files {directory}")
     try:
-        logger.info(f"внутри трая")
+        logger.info(f"внутри трая считываем всё из {os.listdir(directory)}")
         for filename in os.listdir(directory):
-            logger.info(f"for  {filename=}")
+            #logger.info(f"for  {filename=}")
             if filename.startswith(f"lesson{lesson_number}_") and not filename.endswith(".html") and not filename.endswith(".txt") and not filename.endswith(".md"):
                 file_path = os.path.join(directory, filename)
                 mime_type, _ = mimetypes.guess_type(file_path)
@@ -2441,7 +2465,7 @@ def get_lesson_files(user_id, lesson_number, course_id):
                         delay = delay_value # Default seconds
 
                 files.append({"path": file_path, "type": file_type, "delay": delay})
-                logger.info(f"for  len (files)={len(files)}===========")
+                #logger.info(f"for  len (files)={len(files)}===========")
 
     except FileNotFoundError:
         logger.error(f"Directory not found: {directory}")
@@ -2770,26 +2794,28 @@ async def get_random_homework(conn: sqlite3.Connection, cursor: sqlite3.Cursor, 
         await safe_reply(update, context, "Произошла ошибка при загрузке работы. Попробуйте позже.")
 
 
-conn = sqlite3.connect("bot_db.sqlite", check_same_thread=False)
-cursor = conn.cursor()
-# Обрабатывает нажатия на кнопки все
-button_handlers = {
-    "get_current_lesson": lambda update, context: get_current_lesson(conn, cursor, update, context),
-    "gallery": show_gallery,  # Если show_gallery не требует conn и cursor
-    "gallery_next": lambda update, context: get_random_homework(conn, cursor, update, context),
-    "menu_back": lambda update, context: show_main_menu(conn, cursor, update, context),
-    "support": show_support,  # Если show_support не требует conn и cursor
-    "tariffs": show_tariffs,  # Если show_tariffs не требует conn и cursor
-    "course_settings": show_course_settings,  # Если show_course_settings не требует conn и cursor
-    "statistics": show_statistics,  # Если show_statistics не требует conn и cursor
-    "preliminary_tasks": send_preliminary_material,  # Если send_preliminary_material не требует conn и cursor
-}
+
+
 
 
 async def button_handler(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
     """Handles button presses."""
     user_id = update.effective_user.id
     logger.info(f"{user_id} - button_handler")
+
+    # Обрабатывает нажатия на кнопки все
+    button_handlers = {
+        "get_current_lesson": lambda update, context: get_current_lesson(conn, cursor, update, context),
+        "gallery": show_gallery,  # Если show_gallery не требует conn и cursor
+        "gallery_next": lambda update, context: get_random_homework(conn, cursor, update, context),
+        "menu_back": lambda update, context: show_main_menu(conn, cursor, update, context),
+        "support": show_support,  # Если show_support не требует conn и cursor
+        "tariffs": show_tariffs,  # Если show_tariffs не требует conn и cursor
+        "course_settings": show_course_settings,  # Если show_course_settings не требует conn и cursor
+        "statistics": show_statistics,  # Если show_statistics не требует conn и cursor
+        "preliminary_tasks": send_preliminary_material,  # Если send_preliminary_material не требует conn и cursor
+    }
+
 
     try:
         if update.callback_query:
@@ -3750,17 +3776,7 @@ async def disable_reminders(conn: sqlite3.Connection, cursor: sqlite3.Cursor, up
         logger.warning("Не удалось определить тип update.")
 
 
-# Create a wrapper function for send_reminders
-async def send_reminders_wrapper(context):
-    """Wrapper function for send_reminders to provide database connection"""
-    logger.info(f" send_reminders_wrapper ")
-    conn = sqlite3.connect("bot_db.sqlite", check_same_thread=False)
-    cursor = conn.cursor()
-    try:
-        await send_reminders(conn, cursor, context)
-    finally:
-        cursor.close()
-        conn.close()
+
 
 
 async def send_reminders(conn: sqlite3.Connection, cursor: sqlite3.Cursor, context: CallbackContext):
@@ -3780,24 +3796,26 @@ async def send_reminders(conn: sqlite3.Connection, cursor: sqlite3.Cursor, conte
             )
 
 
-# Define a scheduler for sending lessons
-scheduler = AsyncIOScheduler()
 
-
-# тута инициативно шлём уроки *
 @handle_telegram_errors
-def add_user_to_scheduler(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int, time2: datetime, context: CallbackContext):
+def add_user_to_scheduler(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int, time2: datetime, context: CallbackContext, scheduler):
     """Add user to send_lesson_by_timer with specific time."""
+    """Add user to send_lesson_by_timer with specific time."""
+    logger.info(f" added id {user_id} time {time2.hour}-------------<")
     # Schedule the daily message
-    scheduler.add_job(
-        send_lesson_by_timer,
-        trigger="cron",
-        hour=time2.hour,
-        minute=time2.minute,
-        start_date=datetime.now(),  # Начало выполнения задачи
-        kwargs={"user_id": user_id, "context": context},
-        id=f"lesson_{user_id}",  # Уникальный ID для задачи
-    )
+    try:
+        scheduler.add_job(
+            send_lesson_by_timer,
+            trigger="cron",
+            hour=time2.hour,
+            minute=time2.minute,
+            start_date=datetime.now(),  # Начало выполнения задачи
+            kwargs={"user_id": user_id, "context": context},
+            id=f"lesson_{user_id}",  # Уникальный ID для задачи
+        )
+    except Exception as e:
+         logger.error(f"send_lesson_by_timer failed. {e}------------<<")
+
 
 
 async def stats(conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update, context: CallbackContext):
@@ -4765,10 +4783,8 @@ async def get_next_lesson_time(conn: sqlite3.Connection, cursor: sqlite3.Cursor,
         return "время пока не определено"
 
 
-def setup_admin_commands(application):
-    """Настраивает команды администратора."""
-    conn = sqlite3.connect("bot_db.sqlite")
-    cursor = conn.cursor()
+def setup_admin_commands(application, conn: sqlite3.Connection, cursor: sqlite3.Cursor):
+    """Sets up admin commands."""
     application.add_handler(CommandHandler("stats", lambda update, context: show_stats(conn, cursor, update, context)))
     application.add_handler(CallbackQueryHandler(lambda update, context: admin_approve_purchase(conn, cursor, update, context), pattern="^admin_approve_purchase_"))
     application.add_handler(CallbackQueryHandler(lambda update, context: admin_reject_purchase(conn, cursor, update, context), pattern="^admin_reject_purchase_"))
@@ -4776,19 +4792,16 @@ def setup_admin_commands(application):
     application.add_handler(CallbackQueryHandler(lambda update, context: admin_reject_discount(conn, cursor, update, context), pattern="^admin_reject_discount_"))
 
 
-def setup_user_commands(application):
-    """Настраивает команды пользователя."""
-    conn = sqlite3.connect("bot_db.sqlite")
-    cursor = conn.cursor()
+def setup_user_commands(application, conn: sqlite3.Connection, cursor: sqlite3.Cursor):
+    """Sets up user commands."""
     application.add_handler(CommandHandler("start", lambda update, context: start(conn, cursor, update, context)))
     application.add_handler(CommandHandler("menu", lambda update, context: show_main_menu(conn, cursor, update, context)))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: handle_text_message(conn, cursor, update, context)))
     application.add_handler(CallbackQueryHandler(lambda update, context: tariff_callback(conn, cursor, update, context), pattern="^tariff_"))
 
-    # лутбоксы
+    # lootboxes
     application.add_handler(CommandHandler("tokens", lambda update, context: show_token_balance(conn, cursor, update, context)))
     application.add_handler(CommandHandler("buy_lootbox", lambda update, context: buy_lootbox(conn, cursor, update, context)))
-
 
 
 def init_lootboxes(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
@@ -4809,6 +4822,8 @@ def init_lootboxes(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
         logger.error(f"Ошибка при инициализации таблицы lootboxes: {e}")
 
 def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
+    logger.info("Таблицы SQL  создавайтес!!!!!!!!!!!!!!!!")
+
     try:
         cursor.executescript(
             """
@@ -4826,8 +4841,10 @@ def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
                 active_course_id TEXT,
                 user_code TEXT,
                 last_bonus_date TEXT,
-                trust_credit column INTEGER, DEFAULT 0,
-                support_requests INTEGER DEFAULT 0
+                trust_credit INTEGER DEFAULT 0,
+                support_requests INTEGER DEFAULT 0,
+                morning_time TEXT,   
+                evening_time TEXT    
             );
 
             CREATE TABLE IF NOT EXISTS homeworks (
@@ -4840,7 +4857,7 @@ def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
                 message_id INTEGER,
                 status TEXT DEFAULT 'pending',
                 feedback TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
                 lesson_sent_time DATETIME,
                 first_submission_time DATETIME,
                 submission_time DATETIME,
@@ -4858,17 +4875,17 @@ def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
-                action TEXT, -- 'earn' или 'spend'
+                action TEXT, 
                 amount INTEGER,
-                reason TEXT, -- Например, 'registration', 'referral', 'lootbox'
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                reason TEXT, 
+                timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
             );
 
             CREATE TABLE IF NOT EXISTS lootboxes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                box_type TEXT, -- 'light' или 'full'
-                reward TEXT, -- Награда (например, 'скидка', 'товар')
-                probability REAL -- Вероятность выпадения
+                box_type TEXT, 
+                reward TEXT, 
+                probability REAL 
             );
 
             CREATE TABLE IF NOT EXISTS admins (
@@ -4880,7 +4897,7 @@ def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
                 code_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 admin_id INTEGER,
                 code TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
                 used BOOLEAN DEFAULT FALSE,
                 FOREIGN KEY(admin_id) REFERENCES admins(admin_id)
             );
@@ -4898,7 +4915,7 @@ def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
                 course_id TEXT,
                 course_type TEXT CHECK(course_type IN ('main', 'auxiliary')),
                 progress INTEGER DEFAULT 0,
-                purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                purchase_date TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
                 tariff TEXT,
                 PRIMARY KEY (user_id, course_id),
                 FOREIGN KEY(user_id) REFERENCES users(user_id)
@@ -4915,30 +4932,62 @@ async def cancel(conn, cursor, update, context):
     await update.message.reply_text("Разговор завершён.")
     return ConversationHandler.END
 
+def create_connection(db_file=DATABASE_FILE):
+    """Creates a database connection to the SQLite database specified by db_file."""
+    conn = None
+    cursor = None  # Инициализируем cursor
+    try:
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()  # Создаем курсор
+        logger.info(f"create_connection {db_file}")
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при подключении к базе данных: {e}")
+    return conn, cursor # Всегда возвращаем кортеж (conn, cursor)
 
-def main() -> None:
+
+def main():
     """Start the bot."""
-    # Persistence
-    persistence = PicklePersistence(filepath="bot_data.pkl")
+
+    # Database connection
+    conn, cursor = create_connection()
+    create_all_tables(conn, cursor)
+
+    # Job scheduler
+    scheduler = AsyncIOScheduler()
     # Create the Application and pass it your bot's token.
     application = ApplicationBuilder().token(TOKEN).persistence(persistence).build()
 
-    # Middleware для логирования всех сообщений
-    # не работает - всё портит application.add_handler(MessageHandler(filters.ALL, logging_middleware))
+    # Load existing scheduled lessons from the database
+    logger.info("до morning_time")
+    cursor.execute("SELECT user_id, morning_time, evening_time FROM users")
+    users = cursor.fetchall()
+    logger.info("после morning_time")
+    for user_id, morning_time, evening_time in users:
+        if morning_time:
+            m_hour, m_minute = map(int, morning_time.split(':'))
+            morning_datetime = datetime.now().replace(hour=m_hour, minute=m_minute, second=0, microsecond=0)
+            add_user_to_scheduler(conn, cursor, user_id, morning_datetime, application.job_queue, scheduler)
+
+        # if evening_time:
+        #     e_hour, e_minute = map(int, evening_time.split(':'))
+        #     evening_datetime = datetime.now().replace(hour=e_hour, minute=e_minute, second=0, microsecond=0)
+        #     add_user_to_scheduler(conn, cursor, user_id, evening_datetime, application.job_queue, scheduler)
 
 
     # Add command handlers
     application.add_handler(CommandHandler("start", lambda update, context: start(conn, cursor, update, context)))
-    application.add_handler(CommandHandler(CMD_LESSON,  lambda update, context: lesson_command(conn, cursor, update, context)))
+    application.add_handler(CommandHandler(CMD_LESSON, lambda update, context: lesson_command(conn, cursor, update, context)))
     application.add_handler(CommandHandler(CMD_INFO, lambda update, context: info_command(conn, cursor, update, context)))
-    application.add_handler(CommandHandler(CMD_HOMEWORK,  lambda update, context: homework_command(conn, cursor, update, context)))
-    application.add_handler(CommandHandler(CMD_ADMINS,  lambda update, context: admins_command(conn, cursor, update, context)))
-
+    application.add_handler(CommandHandler(CMD_HOMEWORK, lambda update, context: homework_command(conn, cursor, update, context)))
+    application.add_handler(CommandHandler(CMD_ADMINS, lambda update, context: admins_command(conn, cursor, update, context)))
+    logger.info("перед  conv_handler ========================")
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", lambda update, context: start(conn, cursor, update, context) ) ],
+        entry_points=[CommandHandler("start", lambda update, context: start(conn, cursor, update, context))],
         states={
-            WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: handle_user_info(conn, cursor, update, context)),],
-            WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: handle_code_words(conn, cursor, update, context))],
+            WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND,
+                                           lambda update, context: handle_user_info(conn, cursor, update, context))],
+            WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND,
+                                           lambda update, context: handle_code_words(conn, cursor, update, context))],
             ACTIVE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND,
                                lambda update, context: handle_text_message(conn, cursor, update, context)),
@@ -4950,37 +4999,40 @@ def main() -> None:
                 CallbackQueryHandler(lambda update, context: approve_homework(conn, cursor, update, context),
                                      pattern=r"^approve_homework_\d+_\d+$"),
                 CommandHandler("self_approve",
-                               lambda update, context: self_approve_homework(conn, cursor, update, context)),  ],
-            COURSE_SETTINGS:[ CallbackQueryHandler(lambda update, context: show_course_settings(conn, cursor, update, context)),],
+                               lambda update, context: self_approve_homework(conn, cursor, update, context)), ],
+            COURSE_SETTINGS: [
+                CallbackQueryHandler(lambda update, context: show_course_settings(conn, cursor, update, context))],
             WAIT_FOR_SUPPORT_TEXT: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND | filters.PHOTO,
                     lambda update, context: get_support_text(conn, cursor, update, context),
                 )
             ],
-            WAIT_FOR_SELFIE: [MessageHandler(filters.PHOTO, lambda update, context: process_selfie(conn, cursor, update, context))],
+            WAIT_FOR_SELFIE: [
+                MessageHandler(filters.PHOTO, lambda update, context: process_selfie(conn, cursor, update, context))],
             WAIT_FOR_DESCRIPTION: [
                 MessageHandler(filters.TEXT, lambda update, context: process_description(conn, cursor, update, context))
             ],
-            WAIT_FOR_CHECK: [MessageHandler(filters.PHOTO, lambda update, context: process_check(conn, cursor, update, context))],
+            WAIT_FOR_CHECK: [
+                MessageHandler(filters.PHOTO, lambda update, context: process_check(conn, cursor, update, context))],
             WAIT_FOR_GIFT_USER_ID: [
-                MessageHandler(filters.TEXT, lambda update, context: process_gift_user_id(conn, cursor, update, context))
+                MessageHandler(filters.TEXT,
+                               lambda update, context: process_gift_user_id(conn, cursor, update, context))
             ],
             WAIT_FOR_PHONE_NUMBER: [
-                MessageHandler(filters.CONTACT, lambda update, context: process_phone_number(conn, cursor, update, context))
+                MessageHandler(filters.CONTACT,
+                               lambda update, context: process_phone_number(conn, cursor, update, context))
             ],
         },
-
         fallbacks=[CommandHandler("cancel", lambda update, context: cancel(conn, cursor, update, context))],
         persistent=True,  # Включаем персистентность
         name="my_conversation",
         allow_reentry=True,
-
     )
     application.add_handler(conv_handler)
 
-    setup_user_commands(application)
-    setup_admin_commands(application)
+    setup_user_commands(application, conn, cursor)
+    setup_admin_commands(application, conn, cursor)
 
     # Обработчик для кнопок предварительных материалов
     application.add_handler(
@@ -4989,8 +5041,6 @@ def main() -> None:
             pattern="^preliminary_",
         )
     )
-
-    application.job_queue.run_repeating(send_reminders_wrapper, interval=60, first=10)  # Проверка каждую минуту
 
     application.add_handler(CommandHandler("reminders", lambda update, context: reminders(conn, cursor, update, context)))
     application.add_handler(CommandHandler("set_morning", lambda update, context: set_morning(conn, cursor, update, context)))
@@ -5002,18 +5052,19 @@ def main() -> None:
 
     application.add_handler(CallbackQueryHandler(lambda update, context: button_handler(conn, cursor, update, context)))
 
-
-    # Start the scheduler
-    scheduler.start()
-
     # Add error handler
     application.add_handler(MessageHandler(filters.ALL, lambda update, context: unknown(update, context)))
 
-    application.add_error_handler(lambda update, context, error: handle_error(conn, cursor, update, context, error))
+    # Error handler
+    application.add_error_handler(
+        lambda update, context, error: handle_error(conn, cursor, update, context, error))
 
-    # Run the bot until the user presses Ctrl-C
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-    conn.close()
+    scheduler.start()
+
+    # Start the bot
+    logger.info("Бот запущен...")
+    application.run_polling()
+
 
 
 if __name__ == "__main__":

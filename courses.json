@@ -1,21 +1,21 @@
 [
   {
     "course_id": "femininity_self_check",
-    "course_name": "Femininity Self Check",
+    "course_name": "Женственность",
     "course_type": "main",
     "code_word": "роза",
     "price_rub": 1500
   },
   {
     "course_id": "femininity_admin_check",
-    "course_name": "Femininity Admin Check",
+    "course_name": "Женственность",
     "course_type": "main",
     "code_word": "фиалка",
     "price_rub": 3000
   },
   {
     "course_id": "femininity_premium",
-    "course_name": "Femininity Premium",
+    "course_name": "Женственность",
     "course_type": "main",
     "code_word": "лепесток",
     "price_rub": 5000
