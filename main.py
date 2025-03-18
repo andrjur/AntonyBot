@@ -1,4 +1,9 @@
 # main.py
+# Импортируем функции из database.py
+from database import DatabaseConnection, get_user_data, clear_user_cache, create_all_tables, load_payment_info, handle_error, load_bonuses, load_courses, load_ad_config, load_course_data, load_delay_messages
+
+# Импортируем функции из utils.py
+from utils import safe_reply, handle_telegram_errors
 
 import logging
 import mimetypes
@@ -15,7 +20,7 @@ from telegram import (
     InputMediaDocument,
     KeyboardButton,
     ReplyKeyboardMarkup,
-    # ReplyKeyboardRemove,  # <--- Добавьте эту строку
+    ReplyKeyboardRemove,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -45,7 +50,7 @@ CMD_HOMEWORK = "homework"
 CMD_ADMINS = "admins"
 
 
-DATABASE_FILE = "bot_db.sqlite"
+#DATABASE_FILE = "bot_db.sqlite" переехал в другой файл
 
 TARIFFS_FILE = "tariffs.json"
 
@@ -64,35 +69,35 @@ PLATINUM_COIN = "💎"  # Platinum Coin
 TOKEN_TO_RUB_RATE = 100  # 1 token = 100 rubles
 
 
-class DatabaseConnection:
-    _instance = None
-
-    def __new__(cls, db_file=DATABASE_FILE):
-        if cls._instance is None:
-            cls._instance = super(DatabaseConnection, cls).__new__(cls)
-            try:
-                cls._instance.conn = sqlite3.connect(db_file)
-                cls._instance.cursor = cls._instance.conn.cursor()
-                logger.info(f"DatabaseConnection: Подключение к {db_file}")
-            except sqlite3.Error as e:
-                logger.error(f"DatabaseConnection: Ошибка при подключении к базе данных: {e}")
-                cls._instance.conn = None
-                cls._instance.cursor = None
-        return cls._instance
-
-    def get_connection(self):
-        return self.conn
-
-    def get_cursor(self):
-        return self.cursor
-
-    def close(self):
-        if self.conn:
-            self.conn.close()
-            logger.info("DatabaseConnection: Соединение с базой данных закрыто.")
-            self.conn = None
-            self.cursor = None
-
+# class old_DatabaseConnection:
+#     _instance = None
+#
+#     def __new__(cls, db_file=DATABASE_FILE):
+#         if cls._instance is None:
+#             cls._instance = super(DatabaseConnection, cls).__new__(cls)
+#             try:
+#                 cls._instance.conn = sqlite3.connect(db_file)
+#                 cls._instance.cursor = cls._instance.conn.cursor()
+#                 logger.info(f"DatabaseConnection: Подключение к {db_file}")
+#             except sqlite3.Error as e:
+#                 logger.error(f"DatabaseConnection: Ошибка при подключении к базе данных: {e}")
+#                 cls._instance.conn = None
+#                 cls._instance.cursor = None
+#         return cls._instance
+#
+#     def get_connection(self):
+#         return self.conn
+#
+#     def get_cursor(self):
+#         return self.cursor
+#
+#     def close(self):
+#         if self.conn:
+#             self.conn.close()
+#             logger.info("DatabaseConnection: Соединение с базой данных закрыто.")
+#             self.conn = None
+#             self.cursor = None
+#
 
 class Course:
     def __init__(self, course_id, course_name, course_type, code_word, price_rub=None, price_tokens=None):
@@ -114,6 +119,8 @@ class CustomFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         full_time = super().formatTime(record, datefmt)
         return full_time[-9:]
+
+
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -187,48 +194,6 @@ def load_ad_config():
 bonuses_config = load_bonuses()  # Загружаем бонусы при старте
 ad_config = load_ad_config()
 
-def handle_telegram_errors2(func):
-    async def wrapper(*args, **kwargs):
-        try:
-            return await func(*args, **kwargs)
-        except TelegramError as e:
-            # Telegram API ошибки (например, сетевые проблемы)
-            logger.error(f"Telegram API Error в функции {func.__name__}: {e}")
-            update = kwargs.get("update") or args[0] if args else None
-            if update:
-                await update.effective_message.reply_text(
-                    "Ошибка взаимодействия с Telegram. Попробуйте позже."
-                )
-        except sqlite3.Error as e:
-            # Ошибки базы данных
-            logger.error(f"Database Error в функции {func.__name__}: {e}")
-            update = kwargs.get("update") or args[0] if args else None
-            if update:
-                await update.effective_message.reply_text(
-                    "Ошибка базы данных. Попробуйте позже."
-                )
-        except Exception as e:
-            # Все остальные ошибки
-            logger.error(f"Непредвиденная ошибка в функции {func.__name__}: {e}")
-            update = kwargs.get("update") or args[0] if args else None
-            if update:
-                await update.effective_message.reply_text(
-                    "Произошла ошибка. Попробуйте позже."
-                )
-    return wrapper
-
-#  Add a custom error handler decorator
-def handle_telegram_errors(func):
-    async def wrapper(*args, **kwargs):
-        try:
-            return await func(*args, **kwargs)
-        except TelegramError as e:
-            logger.error(f"Telegram API Error: {e}")
-            # Handle specific error types
-        except Exception as e:
-            logger.error(f"General Error: {e}")
-
-    return wrapper
 
 
 # не работает, скотина и всё ломает. Оставлена в назидание
@@ -346,36 +311,6 @@ DEFAULT_LESSON_DELAY_HOURS = 3
 logger.info(
     f"ПОЕХАЛИ {DEFAULT_LESSON_DELAY_HOURS=} {DEFAULT_LESSON_INTERVAL=} время старта {time.strftime('%d/%m/%Y %H:%M:%S')}")
 
-# Словарь для кэширования данных
-USER_CACHE = {}
-
-
-def get_user_data(user_id: int):  # Добавил conn и cursor
-    """Получает данные пользователя из кэша или базы данных."""
-    db = DatabaseConnection()
-    conn = db.get_connection()
-    cursor = db.get_cursor()
-    
-    if user_id in USER_CACHE:
-        return USER_CACHE[user_id]
-
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    data = cursor.fetchone()
-
-    if data:
-        USER_CACHE[user_id] = data
-        return data
-
-    return None
-
-
-def clear_user_cache(user_id: int):  # Добавил conn и cursor
-    """Очищает кэш для указанного пользователя."""
-    
-    logger.info(f" clear_user_cache {user_id} очистили")
-    if user_id in USER_CACHE:
-        del USER_CACHE[user_id]
-
 
 async def safe_reply(update: Update, context: CallbackContext, text: str,
                      reply_markup: InlineKeyboardMarkup | None = None):
@@ -411,36 +346,8 @@ async def safe_reply(update: Update, context: CallbackContext, text: str,
         logger.error(f"Ошибка при отправке сообщения: {e}")
 
 
-# кому платить строго ненадо    
-def load_payment_info(filename):
-    """Загружает данные оплаты из JSON файла."""
-    try:
-        with open(filename, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            logger.info(f"Файл с данными об оплате: {filename}")
-            return data
-    except FileNotFoundError:
-        logger.error(f"Файл с данными об оплате не найден: {filename}")
-        return {}
-    except json.JSONDecodeError:
-        logger.error(f"Ошибка при чтении JSON файла: {filename}")
-        return {}
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке данных об оплате: {e}")
-        return {}
-
 
 PAYMENT_INFO = load_payment_info(PAYMENT_INFO_FILE)
-
-
-async def handle_error(update: Update, context: CallbackContext, error: Exception):
-    """Handles errors that occur in the bot."""
-    db = DatabaseConnection()
-    conn = db.get_connection()
-    cursor = db.get_cursor()
-
-    logger.error(f"Произошла ошибка:: {error}")
-    await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
 
 
 # получение имени и проверка *
@@ -1388,8 +1295,10 @@ async def start(update: Update, context: CallbackContext) -> int:
     logger.info(f"Пользователь {user_id} запустил команду /start")
 
     # Fetch user info from the database
-    cursor.execute("SELECT full_name, active_course_id FROM users WHERE user_id = ?", (user_id,))
-    user_data = cursor.fetchone()
+    user_data=None
+    if cursor:
+        cursor.execute("SELECT full_name, active_course_id FROM users WHERE user_id = ?", (user_id,))
+        user_data = cursor.fetchone()
 
     if user_data:
         full_name = user_data[0]
@@ -1568,6 +1477,70 @@ async def fetch_user_data(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user
         logger.error(f"Database error fetching user data: {e}")
         return None
 
+#18-03 17-24
+@handle_telegram_errors
+async def new_activate_course(update: Update, context: CallbackContext, user_id: int, user_code: str):
+    """
+    Активирует курс для пользователя на основе кодового слова.
+    Использует данные из COURSE_DATA_FILE, не требуя новых столбцов в базе данных.
+    """
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    try:
+        # Получаем данные о курсе из COURSE_DATA по кодовому слову
+        course = COURSE_DATA.get(user_code)
+        if not course:
+            await update.message.reply_text("Неверное кодовое слово. Попробуйте снова.")
+            return
+
+        course_id_full = course.course_id  # Полное название курса (например, femininity_premium)
+        course_id = course_id_full.split("_")[0]  # Базовое название курса (например, femininity)
+        course_type = course.course_type  # 'main' или 'auxiliary'
+        tariff = course_id_full.split("_")[1] if "_" in course_id_full else "default"  # Тариф (self_check, admin_check и т.д.)
+
+        logger.info(f"activate_course: {tariff} | {course_id_full}")
+
+        # Проверяем, есть ли уже курс с таким базовым названием у пользователя
+        cursor.execute("""
+            SELECT course_id FROM user_courses
+            WHERE user_id = ? AND course_id LIKE ?
+        """, (user_id, f"{course_id}%"))
+        existing_course = cursor.fetchone()
+
+        if existing_course:
+            await update.message.reply_text("У вас уже активирован курс с таким названием.")
+            return
+
+        # Активируем курс
+        cursor.execute("""
+            INSERT INTO user_courses (user_id, course_id, course_type, progress, tariff)
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, course_id_full, course_type, 1, tariff))
+        conn.commit()
+
+        # Обновляем active_course_id в таблице users
+        cursor.execute("""
+            UPDATE users SET active_course_id = ? WHERE user_id = ?
+        """, (course_id_full, user_id))
+        conn.commit()
+
+        logger.info(f"Курс {course_id_full} успешно активирован для пользователя {user_id}")
+
+        # Отправляем сообщение пользователю
+        await update.message.reply_text(
+            f"Курс '{course.course_name}' успешно активирован! "
+            f"Тип: {course_type}, Тариф: {tariff}. "
+            "Получите первый материал."
+        )
+
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при активации курса: {e}")
+        await update.message.reply_text("Произошла ошибка при активации курса. Попробуйте позже.")
+    finally:
+        if conn:
+            conn.close()
 
 async def activate_course(update: Update, context: CallbackContext, user_id: int, user_code: str):
     """Активирует курс для пользователя."""
@@ -1594,36 +1567,6 @@ async def activate_course(update: Update, context: CallbackContext, user_id: int
             (user_id, f"{course_id}%"),
         )
         existing_course = cursor.fetchone()
-
-        # Раздача слонов Award initial coins upon course activation
-        bronze_coins = 3
-        silver_coins = 1
-        cursor.execute(
-            """
-                UPDATE users
-                SET bronze_coins = COALESCE(bronze_coins, 0) + ?,
-                    silver_coins = COALESCE(silver_coins, 0) + ?
-                WHERE user_id = ?
-            """,
-            (bronze_coins, silver_coins, user_id)
-        )
-        conn.commit()
-        # продолжается
-        user_data = await fetch_user_data(conn, cursor, user_id)
-        if user_data:
-            diamond_coins = user_data[5]
-            gold_coins = user_data[6]
-            silver_coins = user_data[7]
-            bronze_coins = user_data[8]
-        else:
-            diamond_coins = 0
-            gold_coins = 0
-            silver_coins = 0
-            bronze_coins = 0
-
-        logger.info(f"coins {bronze_coins=} {silver_coins=} {gold_coins=} {diamond_coins=}")
-
-        # закончили
 
         # Handle course activation logic
         if existing_course:
@@ -5618,150 +5561,15 @@ def init_lootboxes(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
         logger.error(f"Ошибка при инициализации таблицы lootboxes: {e}")
 
 
-def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
-    logger.info("Таблицы SQL  создавайтес!!!!!!!!!!!!!!!!")
-
-    try:
-        cursor.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                full_name TEXT NOT NULL DEFAULT 'ЧЕБУРАШКА',
-                birthday TEXT,
-                registration_date TEXT,
-                referral_count INTEGER DEFAULT 0,
-                penalty_task TEXT,
-                preliminary_material_index INTEGER DEFAULT 0,
-                tariff TEXT,
-                continuous_flow BOOLEAN DEFAULT 0,
-                next_lesson_time DATETIME,
-                active_course_id TEXT,
-                user_code TEXT,
-                last_bonus_date TEXT,
-                trust_credit INTEGER DEFAULT 0,
-                support_requests INTEGER DEFAULT 0,
-                morning_time TEXT,   
-                evening_time TEXT    
-            );
-
-            CREATE TABLE IF NOT EXISTS homeworks (
-                hw_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                course_id TEXT,  
-                lesson INTEGER,
-                file_id TEXT,
-                file_type TEXT,
-                message_id INTEGER,
-                status TEXT DEFAULT 'pending',
-                feedback TEXT,
-                timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
-                lesson_sent_time DATETIME,
-                first_submission_time DATETIME,
-                submission_time DATETIME,
-                approval_time DATETIME,
-                final_approval_time DATETIME,
-                admin_comment TEXT,
-                FOREIGN KEY(user_id) REFERENCES users(user_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS user_tokens (
-                user_id INTEGER PRIMARY KEY,
-                tokens INTEGER DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                action TEXT, 
-                amount INTEGER,
-                reason TEXT, 
-                timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
-            );
-
-            CREATE TABLE IF NOT EXISTS lootboxes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                box_type TEXT, 
-                reward TEXT, 
-                probability REAL 
-            );
-
-            CREATE TABLE IF NOT EXISTS admins (
-                admin_id INTEGER PRIMARY KEY,
-                level INTEGER DEFAULT 1
-            );
-
-            CREATE TABLE IF NOT EXISTS admin_codes (
-                code_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                admin_id INTEGER,
-                code TEXT,
-                created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
-                used BOOLEAN DEFAULT FALSE,
-                FOREIGN KEY(admin_id) REFERENCES admins(admin_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS user_settings (
-                user_id INTEGER PRIMARY KEY,
-                morning_notification TIME,
-                evening_notification TIME,
-                show_example_homework BOOLEAN DEFAULT 1,
-                FOREIGN KEY(user_id) REFERENCES users(user_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS products (
-                product_id INTEGER PRIMARY KEY,
-                product_name TEXT NOT NULL,
-                price INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS user_courses (
-                user_id INTEGER,
-                course_id TEXT,
-                course_type TEXT CHECK(course_type IN ('main', 'auxiliary')),
-                progress INTEGER DEFAULT 0,
-                purchase_date TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
-                tariff TEXT,
-                PRIMARY KEY (user_id, course_id),
-                FOREIGN KEY(user_id) REFERENCES users(user_id)
-            );
-            """
-        )
-        conn.commit()
-        logger.info("База данных успешно создана/сохранена.")
-    except sqlite3.Error as e:
-        logger.error(f"Ошибка при создании базы данных: {e}")
-
-
 async def cancel (update, context):
     await update.message.reply_text("Разговор завершён.")
     return ConversationHandler.END
 
 
-def create_connection(db_file=DATABASE_FILE):
-    """Creates a database connection to the SQLite database specified by db_file."""
-    conn = None
-    cursor = None  # Инициализируем cursor
-    try:
-        conn = sqlite3.connect(db_file)
-        cursor = conn.cursor()  # Создаем курсор
-        logger.info(f"create_connection {db_file}")
-    except sqlite3.Error as e:
-        logger.error(f"Ошибка при подключении к базе данных: {e}")
-    return conn, cursor  # Всегда возвращаем кортеж (conn, cursor)
-
-
 def main():
-    # Database connection
-    # Использование:
+    # Создаем таблицы перед инициализацией бота
+    create_all_tables()
     db = DatabaseConnection()
-    conn = db.get_connection()
-    cursor = db.get_cursor()
-
-    #conn, cursor = create_connection() старый вариант - переехали на Синглтон
-
-    if conn and cursor:
-        create_all_tables(conn, cursor)
-    else:
-        logger.error("Database connection failed - cannot create tables")
 
     # Job scheduler
     scheduler = AsyncIOScheduler()
