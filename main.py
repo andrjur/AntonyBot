@@ -187,6 +187,35 @@ def load_ad_config():
 bonuses_config = load_bonuses()  # Загружаем бонусы при старте
 ad_config = load_ad_config()
 
+def handle_telegram_errors2(func):
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except TelegramError as e:
+            # Telegram API ошибки (например, сетевые проблемы)
+            logger.error(f"Telegram API Error в функции {func.__name__}: {e}")
+            update = kwargs.get("update") or args[0] if args else None
+            if update:
+                await update.effective_message.reply_text(
+                    "Ошибка взаимодействия с Telegram. Попробуйте позже."
+                )
+        except sqlite3.Error as e:
+            # Ошибки базы данных
+            logger.error(f"Database Error в функции {func.__name__}: {e}")
+            update = kwargs.get("update") or args[0] if args else None
+            if update:
+                await update.effective_message.reply_text(
+                    "Ошибка базы данных. Попробуйте позже."
+                )
+        except Exception as e:
+            # Все остальные ошибки
+            logger.error(f"Непредвиденная ошибка в функции {func.__name__}: {e}")
+            update = kwargs.get("update") or args[0] if args else None
+            if update:
+                await update.effective_message.reply_text(
+                    "Произошла ошибка. Попробуйте позже."
+                )
+    return wrapper
 
 #  Add a custom error handler decorator
 def handle_telegram_errors(func):
@@ -404,8 +433,7 @@ def load_payment_info(filename):
 PAYMENT_INFO = load_payment_info(PAYMENT_INFO_FILE)
 
 
-async def handle_error(update: Update, context: CallbackContext,
-                       error: Exception):
+async def handle_error(update: Update, context: CallbackContext, error: Exception):
     """Handles errors that occur in the bot."""
     db = DatabaseConnection()
     conn = db.get_connection()
@@ -482,48 +510,50 @@ async def handle_user_info(update: Update, context: CallbackContext):  # Доб�
 
 # проверка оплаты через кодовые слова *
 @handle_telegram_errors
-async def handle_code_words(update: Update, context: CallbackContext): 
-    
+async def handle_code_words(update: Update, context: CallbackContext):
     db = DatabaseConnection()
     conn = db.get_connection()
     cursor = db.get_cursor()
 
-
     user_id = update.effective_user.id if update.effective_user else None
     if user_id is None:
         logger.error("Could not get user ID - effective_user is None")
-        return
-    # Safely get text from message, handling None case
+        return ConversationHandler.END
+
     user_code = update.message.text.strip() if update.message and update.message.text else ""
 
-    # Логирование текущего состояния пользователя
     logger.info(f" handle_code_words {user_id}   {user_code}")
-
     logger.info(f"345 COURSE_DATA {COURSE_DATA}   ")
 
     if user_code in COURSE_DATA:
-        # Активируем курс
-        await activate_course(conn, cursor, user_id, user_code)
-        logger.info(f" активирован {user_id}  return ACTIVE ")
+        try:
+            # Активируем курс
+            await activate_course(update, context, user_id, user_code)
+            logger.info(f" 346 активирован {user_id}   ")
 
-        # Отправляем сообщение
-        await safe_reply(update, context, "Курс активирован! Получите первый урок и Вы переходите в главное меню.")
+            # Отправляем сообщение об успешной активации
+            await safe_reply(update, context, "Курс активирован! Получите первый урок.")
 
-        # Отправляем текущий урок
-        await get_current_lesson (update, context)
+            # Отправляем текущий урок
+            await get_current_lesson(update, context)
 
-        # Сбрасываем состояние ожидания кодового слова
-        # Check if user_data exists before accessing
-        if context.user_data is not None:
-            context.user_data["waiting_for_code"] = False
+            # Сбрасываем состояние ожидания кодового слова
+            if context.user_data is not None:
+                context.user_data["waiting_for_code"] = False
 
-        return ACTIVE  # Переходим в состояние ACTIVE
+            logger.info(f" 348   return ACTIVE")
+            return ACTIVE  # Переходим в состояние ACTIVE
+
+        except Exception as e:
+            logger.error(f"Ошибка при активации курса: {e}")
+            await safe_reply(update, context, "Произошла ошибка при активации курса. Попробуйте позже.")
+            return WAIT_FOR_CODE
     else:
         # Неверное кодовое слово
         logger.info(f" Неверное кодовое слово.   return WAIT_FOR_CODE")
-        # Use safe_reply instead of direct message reply to handle None cases
         await safe_reply(update, context, "Неверное кодовое слово. Попробуйте еще раз.")
         return WAIT_FOR_CODE
+
 
 
 def escape_markdown_v2(text):
@@ -1109,6 +1139,33 @@ async def show_main_menu( update: Update, context: CallbackContext):
         Прогресс: {progress_text}
         Домашка: {homework}     Для СамоОдобрения введи потом  /self_approve_{progress}"""
 
+        # Используйте: TODO отображение Qwen
+
+
+        greeting2=  f" \n Курс:  ({course_type})"
+        # 3. Формируем сообщение
+        # Преобразуем токены в монеты
+        bronze_coins = tokens % 10  # 1 BRONZE_COIN = 1 токен
+        tokens //= 10  # остались десятки
+        silver_coins = tokens % 10  # 1 SILVER_COIN = 10 токенов
+        tokens //= 10  # остались сотки
+        gold_coins = tokens % 10  # 1 GOLD_COIN = 100 токенов
+        tokens //= 10  # остались тыщи
+        platinum_coins = tokens  # 1 GEM_COIN = 1000 токенов
+
+        # Формируем строку с монетами
+        coins_display = (
+            f"{PLATINUM_COIN}x{platinum_coins}"
+            f"{GOLD_COIN}x{gold_coins}"
+            f"{SILVER_COIN}x{silver_coins}"
+            f"{BRONZE_COIN}x{bronze_coins}"
+        )
+        tokens = tokens_data[0] if tokens_data else 0  # просто считали заново
+
+        greeting2 += f"Ваши antCoins: {tokens}   {coins_display}\n"
+        greeting2 += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
+        greeting2 += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
+
         # Make buttons
         keyboard = [
             [
@@ -1161,7 +1218,7 @@ async def show_main_menu( update: Update, context: CallbackContext):
         logger.info(f" pre #Send menu  ---------- ")
         # Send menu
         try:
-            await safe_reply(update, context, greeting, reply_markup=reply_markup)
+            await safe_reply(update, context, greeting+greeting2, reply_markup=reply_markup)
         except TelegramError as e:
             logger.error(f"Telegram API error: {e}")
             await context.bot.send_message(user.id, "Произошла ошибка. Попробуйте позже.")
@@ -1267,75 +1324,104 @@ async def old_get_main_menu_message( user: Update.effective_user) -> str:
 
 
 @handle_telegram_errors
-async def start( update: Update, context: CallbackContext):
-    """
-    Обрабатывает команду /start.
-    Инициализирует взаимодействие с пользователем и управляет потоком разговора на основе состояния пользователя.
-    """
+async def old_start(update: Update, context: CallbackContext) -> int:
+    """Starts the conversation and asks the user for their name."""
     db = DatabaseConnection()
     conn = db.get_connection()
     cursor = db.get_cursor()
 
-    try:
-        user_id = update.effective_user.id
-        logger.info(
-            f"Начало разговора с пользователем {user_id} =================================================================")
-        logger.info(f"Пользователь {user_id} запустил команду /start")
-
-        # Проверка существования пользователя в базе данных
-        cursor.execute(
-            "SELECT user_id, active_course_id, full_name FROM users WHERE user_id = ?",
-            (user_id,)
-        )
-        user_data = cursor.fetchone()
-
-        # Отправка приветственного сообщения
-        await update.effective_message.reply_text(f"👋 Привет! ID пользователя: {user_id}")
-
-        if not user_data:
-            # Новый пользователь - запрос имени
-            logger.info(f"Новый пользователь {user_id} - запрашиваем имя")
-            context.user_data["waiting_for_name"] = True
-            keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel")], ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.effective_message.reply_text(
-                "📝 Пожалуйста, введите ваше имя:",
-                reply_markup=reply_markup
-            )
-            return WAIT_FOR_NAME
-
-        # Существующий пользователь - проверка статуса курса
-        active_course = user_data[1]
-        full_name = user_data[2]
-
-        if not active_course:
-            # Нет активного курса - запрос кода активации
-            logger.info(f"Пользователю {user_id} требуется активация курса")
-            context.user_data["waiting_for_code"] = True
-            keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel")], ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.effective_message.reply_text(
-                f"📝 {full_name}, пожалуйста, введите кодовое слово для активации курса:",
-                reply_markup=reply_markup
-            )
-            return WAIT_FOR_NAME
-
-        # У пользователя есть активный курс - показываем главное меню
-        logger.info(f"У пользователя {user_id} есть активный курс, показываем главное меню")
-        await show_main_menu (update, context)
-        return ACTIVE
-
-    except Exception as e:
-        logger.error(f"Ошибка в функции start для пользователя {update.effective_user.id}: {str(e)}", exc_info=True)
-        await update.effective_message.reply_text(
-            "Произошла ошибка. Пожалуйста, попробуйте позже или обратитесь в поддержку."
-            "Вы также можете использовать следующие команды:\n"
-            f"/{CMD_LESSON} - получить текущий урок\n"
-            f"/{CMD_INFO} - информация о вашем аккаунте\n"
-            f"/{CMD_HOMEWORK} - сдать домашнее задание\n"
-            f"/{CMD_ADMINS} - написать администраторам"
-        )
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id is None:
+        logger.error("Could not get user ID - effective_user is None")
         return ConversationHandler.END
+
+    logger.info(f"Начало разговора с пользователем {user_id} =================================================================")
+    logger.info(f"Пользователь {user_id} запустил команду /start")
+
+    # Fetch user info from the database
+    cursor.execute("SELECT full_name, active_course_id FROM users WHERE user_id = ?", (user_id,))
+    user_data = cursor.fetchone()
+
+    if user_data:
+        full_name = user_data[0]
+        active_course_id = user_data[1]
+
+        if full_name:
+            if active_course_id:
+                logger.info(f"Пользователь {user_id} уже зарегистрирован и курс активирован.")
+                await show_main_menu(update, context)  # Direct user to main menu
+                return ACTIVE  # User is fully set up
+            else:
+                logger.info(f"Пользователь {user_id} зарегистрирован, но курс не активирован.")
+                await safe_reply(update, context, f"{full_name}, для активации курса, введите кодовое слово:")
+                return WAIT_FOR_CODE  # Ask for the code word
+        else:
+            logger.info(f"Пользователь {user_id} зарегистрирован, но имя отсутствует.")
+            await safe_reply(update, context, "Пожалуйста, введите ваше имя:")
+            return WAIT_FOR_NAME  # Ask for the name
+    else:
+        # TODO исправить ошибку username нету есть full_name
+        # CREATE   TABLE  IF  NOT   EXISTS
+        # users( user_id   INTEGER   PRIMARY        KEY,
+        # full_name   TEXT        NOT   NULL    DEFAULT      'ЧЕБУРАШКА',
+        cursor.execute("INSERT INTO users (user_id, username, reg_date) VALUES (?, ?, ?)",
+                       (user_id, update.effective_user.username, datetime.now()))
+        conn.commit()
+        logger.info(f"Новый пользователь {user_id} - запрашиваем имя")
+        await safe_reply(update, context, "Привет! Пожалуйста, введите ваше имя:")
+        return WAIT_FOR_NAME  # Ask for the name
+
+#18-03 17-10 Perplexity
+@handle_telegram_errors
+async def start(update: Update, context: CallbackContext) -> int:
+    """Starts the conversation and asks the user for their name."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id is None:
+        logger.error("Could not get user ID - effective_user is None")
+        return ConversationHandler.END
+
+    logger.info(f"Начало разговора с пользователем {user_id} =================================================================")
+    logger.info(f"Пользователь {user_id} запустил команду /start")
+
+    # Fetch user info from the database
+    cursor.execute("SELECT full_name, active_course_id FROM users WHERE user_id = ?", (user_id,))
+    user_data = cursor.fetchone()
+
+    if user_data:
+        full_name = user_data[0]
+        active_course_id = user_data[1]
+
+        if full_name:
+            if active_course_id:
+                logger.info(f"Пользователь {user_id} уже зарегистрирован и курс активирован.")
+                greeting = f"Приветствую, {full_name.split()[0]}! 👋"
+                await safe_reply(update, context, greeting)
+                await show_main_menu(update, context)  # Direct user to main menu
+                return ACTIVE  # User is fully set up
+            else:
+                logger.info(f"Пользователь {user_id} зарегистрирован, но курс не активирован.")
+                greeting = f"Приветствую, {full_name.split()[0]}! 👋"
+                await safe_reply(update, context, f"{greeting}\nДля активации курса, введите кодовое слово:")
+                return WAIT_FOR_CODE  # Ask for the code word
+        else:
+            logger.info(f"Пользователь {user_id} зарегистрирован, но имя отсутствует.")
+            await safe_reply(update, context, "Пожалуйста, введите ваше имя:")
+            return WAIT_FOR_NAME  # Ask for the name
+    else:
+        # Insert new user into the database
+        cursor.execute("""
+            INSERT INTO users (user_id, full_name, registration_date) 
+            VALUES (?, ?, ?)
+        """, (user_id, 'ЧЕБУРАШКА', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        logger.info(f"Новый пользователь {user_id} - запрашиваем имя")
+        await safe_reply(update, context, "Привет! Пожалуйста, введите ваше имя:")
+        return WAIT_FOR_NAME  # Ask for the name
+
 
 
 # обработчик  всего неизвестного 17 03 ночь
@@ -1471,22 +1557,34 @@ async def get_homework_status_text( user_id, course_id):
         return "Статус домашки неизвестен странен и загадочен"
 
 
-# проверка активации курсов *
+async def fetch_user_data(conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int):
+    """Fetches user data from the database."""
+    try:
+        # Get the user data from the database
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        user_data = cursor.fetchone()
+        return user_data
+    except sqlite3.Error as e:
+        logger.error(f"Database error fetching user data: {e}")
+        return None
+
+
 async def activate_course(update: Update, context: CallbackContext, user_id: int, user_code: str):
     """Активирует курс для пользователя."""
     db = DatabaseConnection()
     conn = db.get_connection()
     cursor = db.get_cursor()
 
-    # Получаем данные о курсе из COURSE_DATA по кодовому слову
-    course = COURSE_DATA[user_code]
-    course_id_full = course.course_id  # Полное название курса (например, femininity_premium)
-    course_id = course_id_full.split("_")[0]  # Базовое название курса (например, femininity)
-    course_type = course.course_type  # 'main' или 'auxiliary'
-    tariff = course_id_full.split("_")[1] if len(
-        course_id_full.split("_")) > 1 else "default"  # Тариф (premium, self_check и т.д.)
-    logger.info(f"activate_course {tariff} {course_id_full}")
     try:
+        # Получаем данные о курсе из COURSE_DATA по кодовому слову
+        course = COURSE_DATA[user_code]
+        course_id_full = course.course_id  # Полное название курса (например, femininity_premium)
+        course_id = course_id_full.split("_")[0]  # Базовое название курса (например, femininity)
+        course_type = course.course_type  # 'main' или 'auxiliary'
+        tariff = course_id_full.split("_")[1] if len(
+            course_id_full.split("_")) > 1 else "default"  # Тариф (premium, self_check и т.д.)
+        logger.info(f"544 activate_course {tariff} название курса из файла {course_id_full}")
+
         # Проверяем, есть ли уже какой-то курс с таким базовым названием у пользователя
         cursor.execute(
             """
@@ -1497,13 +1595,44 @@ async def activate_course(update: Update, context: CallbackContext, user_id: int
         )
         existing_course = cursor.fetchone()
 
+        # Раздача слонов Award initial coins upon course activation
+        bronze_coins = 3
+        silver_coins = 1
+        cursor.execute(
+            """
+                UPDATE users
+                SET bronze_coins = COALESCE(bronze_coins, 0) + ?,
+                    silver_coins = COALESCE(silver_coins, 0) + ?
+                WHERE user_id = ?
+            """,
+            (bronze_coins, silver_coins, user_id)
+        )
+        conn.commit()
+        # продолжается
+        user_data = await fetch_user_data(conn, cursor, user_id)
+        if user_data:
+            diamond_coins = user_data[5]
+            gold_coins = user_data[6]
+            silver_coins = user_data[7]
+            bronze_coins = user_data[8]
+        else:
+            diamond_coins = 0
+            gold_coins = 0
+            silver_coins = 0
+            bronze_coins = 0
+
+        logger.info(f"coins {bronze_coins=} {silver_coins=} {gold_coins=} {diamond_coins=}")
+
+        # закончили
+
+        # Handle course activation logic
         if existing_course:
             existing_course_id = existing_course[0]
             existing_tariff = existing_course[1]
 
             if existing_course_id == course_id_full:
                 # Полное совпадение - курс уже активирован
-                await update.message.reply_text("Этот курс уже активирован для вас.")
+                await safe_reply(update, context, "Этот курс уже активирован для вас. \n Your antCoins: 💎x{diamond_coins}🟡x{gold_coins}⚪️x{silver_coins}🟤x{bronze_coins}")
                 return
 
             else:
@@ -1517,7 +1646,7 @@ async def activate_course(update: Update, context: CallbackContext, user_id: int
                     (course_id_full, tariff, user_id, existing_course_id),
                 )
                 conn.commit()
-                await update.message.reply_text(f"Вы перешли с тарифа {existing_tariff} на тариф {tariff}.")
+                await safe_reply(update, context, f"Вы перешли с тарифа {existing_tariff} на тариф {tariff}.")
 
                 # Обновляем active_course_id в users
                 cursor.execute(
@@ -1544,7 +1673,7 @@ async def activate_course(update: Update, context: CallbackContext, user_id: int
             )
             conn.commit()
 
-            await update.message.reply_text(f"Курс {course_id} ({tariff}) активирован!")
+            await safe_reply(update, context, f"Курс {course_id} ({tariff}) активирован!")
 
             # Обновляем active_course_id в users
             cursor.execute(
@@ -1561,7 +1690,7 @@ async def activate_course(update: Update, context: CallbackContext, user_id: int
 
     except Exception as e:
         logger.error(f"Ошибка при активации или обновлении курса для пользователя {user_id}: {e}")
-        await update.message.reply_text("Произошла ошибка при активации курса. Попробуйте позже.")
+        await safe_reply(update, context, "Произошла ошибка при активации курса. Попробуйте позже.")
 
 
 # вычисляем время следующего урока *
@@ -1715,14 +1844,14 @@ async def handle_homework_submission( update: Update, context: CallbackContext):
             keyboard = [
                 [
                     InlineKeyboardButton(
-                        "✅ Принять домашнее задание",
+                        "✅ СамоПринять домашнее задание",
                         callback_data=f"self_approve_{hw_id}",
                     )
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
-                f"Домашнее задание по уроку {lesson} отправлено. Вы можете самостоятельно подтвердить выполнение.",
+                f"Домашнее задание по уроку {lesson} отправлено. Вы самостоятельно подтверждаете выполнение.",
                 reply_markup=reply_markup,
             )
         else:
@@ -2202,7 +2331,7 @@ async def hw_history( update: Update, context: CallbackContext):
         # Формируем текстовое сообщение с историей ДЗ
         message_text = "История ваших домашних заданий:\n"
         for course_id, lesson, status, submission_time in homeworks_data:
-            message_text += f"- Курс: {course_id}, Урок: {lesson}, Статус: {status}, Дата отправки: {submission_time}\n"
+            message_text += f" Курс: {course_id}, Урок: {lesson}, Статус: {status}, Дата отправки: {submission_time}\n"
 
         # await update.callback_query.message.reply_text(message_text)
         await safe_reply(update, context, message_text)
@@ -2977,7 +3106,7 @@ async def show_gallery( update: Update, context: CallbackContext):
 
 
 # галерейка
-async def get_random_homework( update: Update,  context: CallbackContext):
+async def old_get_random_homework( update: Update,  context: CallbackContext):
     """Отображает случайную одобренную работу из галереи."""
     db = DatabaseConnection()
     conn = db.get_connection()
@@ -3063,62 +3192,170 @@ async def get_random_homework( update: Update,  context: CallbackContext):
         logger.error(f"Ошибка при получении случайной работы: {e}")
         await safe_reply(update, context, "Произошла ошибка при загрузке работы. Попробуйте позже.")
 
+# *
+# Get Random Homework
+# 18-03 17-00 Perplexity
+async def get_random_homework(update: Update, context: CallbackContext):
+    """Get a random homework."""
+    logger.info(f" get_random_homework -------------< for user_id {update.effective_user.id}")
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id is None:
+        logger.error("Could not get user ID - effective_user is None")
+        return
+
+    try:
+        # 1. Get the course_id associated with the user
+        cursor.execute(
+            """
+            SELECT uc.course_id
+            FROM user_courses uc
+            WHERE uc.user_id = ?
+            """,
+            (user_id,),
+        )
+        user_course_data = cursor.fetchone()
+        if user_course_data:
+            course_id = user_course_data[0]  # Only fetch course_id
+        else:
+            logger.warning("Пользователь не имеет активного курса.")
+            await safe_reply(update, context, "У вас нет активного курса. Активируйте курс через кодовое слово.")
+            return
+
+        # 2. Get a random homework submission for the course, with images.
+        cursor.execute(
+            """
+            SELECT hw_id,file_id,file_type  -- Only the file_id and hw_id, file_type are necessary
+            FROM homeworks
+            WHERE course_id = ? AND file_type in ('photo','document')
+            ORDER BY RANDOM()
+            LIMIT 1
+            """,
+            (course_id,),
+        )
+
+        homework = cursor.fetchone()
+
+        if homework:
+            hw_id, file_id, file_type = homework  # Unpack the values
+            logger.info(f"file_id={file_id}  and hw_id {hw_id}")
+
+            # Send the file
+            if file_type == "photo":
+                try:
+                    await context.bot.send_photo(
+                        chat_id=update.effective_chat.id, photo=file_id, caption=f"Домашняя работа - hw_id {hw_id}"
+                    )
+                except Exception as e:
+                    logger.error(f" Ошибка при отправке фото: {e}")
+                    await safe_reply(update, context, "Произошла ошибка при загрузке работы. Попробуйте позже.")
+            elif file_type == "document":
+                try:
+                    await context.bot.send_document(
+                        chat_id=update.effective_chat.id,
+                        document=file_id,
+                        caption=f"Домашняя работа - hw_id {hw_id}",
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке документа: {e}")
+                    await safe_reply(update, context, "Произошла ошибка при загрузке работы. Попробуйте позже.")
+        else:
+            await safe_reply(update, context, "К сожалению, работы пока не загружены. Будьте первым!")
+            return
+
+        logger.info(f"  351 После ответа")
+    except Exception as e:
+        logger.exception(f" Ошибка при получении случайной работы")
+        await safe_reply(update, context, "Произошла ошибка при загрузке работы. Попробуйте позже.")
+
 
 async def unknown_command(update: Update, context: CallbackContext):
     """Обработчик для неизвестных команд."""
     await update.message.reply_text("Извините, я не знаю такой команды. Пожалуйста, введите /help, чтобы увидеть список доступных команд.")
 
 
-
-
 async def button_handler(update: Update, context: CallbackContext):
     """Handles button presses."""
-    db = DatabaseConnection()
-    conn = db.get_connection()
-    cursor = db.get_cursor()
-
+    query = update.callback_query
+    data = query.data
     user_id = update.effective_user.id if update.effective_user else None  # Safe get user_id
-    logger.info(f"  -77 button_handler - {user_id}")
+    logger.info(f"{user_id} - button_handler")
+    await query.answer()
 
+    # Обрабатывает нажатия на кнопки все
     button_handlers = {
-        "get_current_lesson": get_current_lesson,
-        "gallery": show_gallery,
-        "gallery_next": get_random_homework,
-        "menu_back": show_main_menu,
-        "support": show_support,
-        "tariffs": show_tariffs,
-        "course_settings": show_course_settings,
-        "statistics": show_statistics,
-        "preliminary_tasks": send_preliminary_material,
+        'get_current_lesson': get_current_lesson,
+        'gallery': show_gallery,
+        'gallery_next': lambda update, context: get_random_homework(update, context),
+        'menu_back': show_main_menu,
+        'support': show_support,
+        'tariffs': show_tariffs,
+        'course_settings': show_course_settings,
+        'statistics': show_statistics,
+        'preliminary_tasks': send_preliminary_material,
     }
 
     try:
-        if update.callback_query:
-            query = update.callback_query
-            callback_data = query.data
-            logger.info(f" 77 button_handler  Нажата кнопка {callback_data}")
-            await query.answer()
-
-            if callback_data.startswith("tariff_"):
-                tariff_id = callback_data.split("_", 1)[1]
-                logger.info(f"Handling tariff selection: {tariff_id}")
-                await handle_tariff_selection(update, context, tariff_id)
+        # Admin commands
+        if str(user_id) in ADMIN_IDS:
+            if data.startswith("approve_payment_"):
+                payment_id = data.split("_")[-1]
+                await handle_approve_payment(update, context, payment_id)
                 return
 
-            if callback_data == "get_current_lesson":
-                await check_last_lesson(update, context)
-                await get_current_lesson(update, context)  # Re-run after check
-            elif callback_data in button_handlers:
-                await button_handlers[callback_data](update, context)
-            else:
-                await safe_reply(update, context, "Неизвестная команда.")
+            elif data.startswith("decline_payment_"):
+                payment_id = data.split("_")[-1]
+                await handle_decline_payment(update, context, payment_id)
+                return
+
+            elif data.startswith("approve_homework_"):
+                user_id_to_approve = data.split("_")[-1]
+                await approve_homework(update, context, user_id_to_approve)
+                return
+
+            elif data.startswith("decline_homework_"):
+                user_id_to_decline = data.split("_")[-1]
+                await decline_homework(update, context, user_id_to_decline)
+                return
+
+        # User commands
+        if data.startswith('tariff_'):
+            logger.info(f" 777 данные {data} ==================")
+            tariff_id = data.split('_', 1)[1]
+            logger.info(f" handler для handle_tariff_selection {tariff_id}")
+            await handle_tariff_selection(update, context, tariff_id)
+
+        elif data.startswith('buy_tariff_'):
+            tariff_id = data.split('_', 2)[2]
+            logger.info(f" handler для handle_buy_tariff {tariff_id}")
+            await handle_buy_tariff(update, context, tariff_id)
+
+        elif data.startswith('go_to_payment_'):
+            tariff_id = data.split('_', 2)[2]
+            logger.info(f" handler для handle_go_to_payment {tariff_id}")
+            await handle_go_to_payment(update, context, tariff_id)
+
+        elif data.startswith('check_payment_'):
+            try:
+                tariff_id = data.split('_', 2)[1]  # Извлекаем tariff_id правильно
+                logger.info(f" handler для handle_check_payment {tariff_id}")
+            except IndexError:
+                logger.error(f"Не удалось извлечь tariff_id из data: {data} ====== 8888")
+                await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+                return
+            await handle_check_payment(update, context, tariff_id)
+
+        elif data in button_handlers:
+            handler = button_handlers[data]
+            await handler(update, context)
         else:
-            await safe_reply(update, context, "Эта функция доступна только при нажатии на кнопку.")
-
+            await safe_reply(update, context, "Unknown command")
     except Exception as e:
-        logger.error(f" Ошибка в button_handler: {e}")
+        logger.error(f"Error: {e}")
         await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
-
 
 
 # выбор товара в магазине *
@@ -3798,50 +4035,241 @@ async def old_handle_homework_actions( update: Update, context: CallbackContext)
     else:
         await query.message.reply_text("Unknown command.")
 
-
-async def approve_homework( update: Update, context: CallbackContext, hw_id: int, reward_amount: int = 0):
-    """    Одобряет домашнее задание и начисляет указанное количество жетонов.    """
+#18-03 15-53
+@handle_telegram_errors
+async def oooold_approve_homework(update: Update, context: CallbackContext, user_id_to_approve: str):
+    """Обрабатывает принятие домашнего задания администратором."""
     db = DatabaseConnection()
     conn = db.get_connection()
     cursor = db.get_cursor()
 
     try:
-        # 1. Get User ID
-        cursor.execute("SELECT user_id FROM homeworks WHERE hw_id = ?", (hw_id,))
-        user_id = cursor.fetchone()[0]
-        # 2. Approve homework
-        cursor.execute("UPDATE homeworks SET status = 'approved' WHERE hw_id = ?", (hw_id,))
-        logger.info(f"Homework with id {hw_id} approved by admin.")
+        #  Get last homework id
+        cursor.execute("""
+               SELECT hw_id
+                FROM homeworks
+                WHERE user_id = ?
+                ORDER BY submission_date DESC
+                LIMIT 1
+        """, (user_id_to_approve,))
 
-        # 3. Assign name by amount
+        homework_id = cursor.fetchone()[0] if cursor.fetchone() else None
+        logger.info(f"  админ принял - домашка = {homework_id}")
+        if homework_id is None:
+            await safe_reply(update, context, "У этого пользователя нет домашки на проверке.")
+            return
 
-        add_amount = 0
-        reward_tokens_smile = ""  # Default value
+        # Обновляем статус домашнего задания
+        cursor.execute("UPDATE homeworks SET status = 'выполнено' WHERE id = ?", (homework_id,))
+        conn.commit()
 
-        if reward_amount == 1:
-            reward_tokens_smile = BRONZE_COIN
-        if reward_amount == 2:
-            reward_tokens_smile = BRONZE_COIN + BRONZE_COIN  # add 2 coins
-        if reward_amount == 3:
-            reward_tokens_smile = BRONZE_COIN + BRONZE_COIN + BRONZE_COIN  # Add 3 coins
-        if reward_amount == 10:
-            reward_tokens_smile = SILVER_COIN
+        await safe_reply(update, context, f"Домашнее задание пользователя {user_id_to_approve} принято.")
 
-        if reward_amount > 0:
-            add_amount = reward_amount
-            await add_tokens(user_id, reward_amount, f"Награда за выполнение домашнего задания {reward_tokens_smile}", update, context)
+        # Отправляем уведомление пользователю
+        await context.bot.send_message(chat_id=user_id_to_approve, text="Ваше домашнее задание принято администратором!")
 
-        await conn.commit()  # commit before the message sent
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при принятии домашнего задания: {e}")
+        await safe_reply(update, context, "Произошла ошибка при принятии домашнего задания. Попробуйте позже.")
 
-        text = f"Домашнее задание одобрено! +{add_amount}{reward_tokens_smile}" if add_amount > 0 else "Домашнее задание одобрено!"
-        await safe_reply(update, context, text)
+#18-03 16-49 Perplexity
+@handle_telegram_errors
+async def ooollldddddd_approve_homework(update: Update, context: CallbackContext, user_id_to_approve: str):
+     # """Обрабатывает принятие домашнего задания администратором."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
 
+    try:
+     # Get the homework id, course_id, and lesson
+     cursor.execute(
+         """
+         SELECT hw_id, course_id, lesson
+         FROM homeworks
+         WHERE user_id = ?
+         ORDER BY submission_time DESC
+         LIMIT 1
+     """,
+         (user_id_to_approve,),
+     )
+
+     result = cursor.fetchone()
+     if result:
+         hw_id, course_id, lesson = result
+         logger.info(f" 663 улов есть  {hw_id=} {course_id=} {lesson=}")
+     else:
+         hw_id = None
+
+     logger.info(f"admin accepted - homework = {hw_id}")
+
+     if hw_id is None:
+         await safe_reply(update, context, "This user has no homework to approve.")
+         return
+
+     # Update the homework status
+     cursor.execute(
+         """
+         UPDATE homeworks
+         SET status = 'approved'
+         WHERE hw_id = ?
+     """, (hw_id,), )
+     conn.commit()
+
+     await safe_reply(update, context, f"Homework from user {user_id_to_approve} (hw_id {hw_id}, lesson {lesson}) is approved.", )
+
+     # Notify the user about the approval
+     await context.bot.send_message(
+         chat_id=user_id_to_approve,
+         text=f"Your homework for lesson {lesson} has been approved!",
+     )
+     logger.info(f"Админ одобряэ! 667 "  )
+
+    except sqlite3.Error as e:
+     logger.error(f"Error while approving homework: {e}")
+     await safe_reply( update, context, "An error occurred while approving the homework. Please try again later." )
+
+#18-03 17-08 Qwen
+@handle_telegram_errors
+async def approve_homework(update: Update, context: CallbackContext, user_id_to_approve: str):
+    """Обрабатывает одобрение домашнего задания администратором."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    try:
+        # Преобразуем user_id в целое число
+        user_id = int(user_id_to_approve)
+    except ValueError:
+        logger.error(f"Неверный формат user_id: {user_id_to_approve}")
+        await safe_reply(update, context, "Неверный ID пользователя.")
+        return
+
+    try:
+        # Получаем последнее ожидающее домашнее задание пользователя
+        cursor.execute("""
+            SELECT hw_id, lesson, course_id 
+            FROM homeworks 
+            WHERE user_id = ? AND status = 'pending' 
+            ORDER BY timestamp DESC 
+            LIMIT 1
+        """, (user_id,))
+        homework_data = cursor.fetchone()
+
+        if not homework_data:
+            await safe_reply(update, context, "У пользователя нет домашних заданий на проверке.")
+            return
+
+        hw_id, lesson, course_id = homework_data
+
+        # Обновляем статус и время одобрения
+        cursor.execute("""
+            UPDATE homeworks 
+            SET status = 'approved', 
+                approval_time = strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime') 
+            WHERE hw_id = ?
+        """, (hw_id,))
+        conn.commit()
+
+        # Проверяем успешность обновления
+        if cursor.rowcount == 0:
+            await safe_reply(update, context, "Не удалось обновить статус задания.")
+            return
+
+        # Уведомляем администратора
+        admin_message = f"✅ Домашнее задание пользователя {user_id} (урок {lesson}) одобрено."
+        await safe_reply(update, context, admin_message)
+
+        # Уведомляем пользователя
+        user_message = f"Поздравляем! Ваше задание по курсу {course_id} (урок {lesson}) принято администратором."
+        await context.bot.send_message(chat_id=user_id, text=user_message)
+
+        # Логируем успешное действие
+        logger.info(f"Admin {update.effective_user.id} approved homework {hw_id} for user {user_id}")
+
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка БД при одобрении ДЗ: {e}")
+        await safe_reply(update, context, "Ошибка базы данных. Попробуйте позже.")
     except Exception as e:
-        logger.error(f"Ошибка при одобрении домашнего задания: {e}")
-        await safe_reply(update, context, "Произошла ошибка при одобрении домашнего задания.")
-        conn.rollback()
+        logger.error(f"Непредвиденная ошибка: {e}")
+        await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+    finally:
+        if conn:
+            conn.close()
+
+@handle_telegram_errors
+async def oooold_decline_homework(update: Update, context: CallbackContext, user_id_to_decline: str):
+    """Обрабатывает отклонение домашнего задания администратором."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    try:
+        #  Get last homework id
+        cursor.execute("""
+                       SELECT hw_id
+                        FROM homeworks
+                        WHERE user_id = ?
+                        ORDER BY submission_date DESC
+                        LIMIT 1
+        """, (user_id_to_decline,))
+        homework_id = cursor.fetchone()[0] if cursor.fetchone() else None
+        logger.info(f" админ отклонил  домашка = {homework_id}")
+        if homework_id is None:
+            await safe_reply(update, context, "У этого пользователя нет домашки на отклонение.")
+            return
+
+        # Обновляем статус домашнего задания
+        cursor.execute("UPDATE homeworks SET status = 'отклонено' WHERE id = ?", (homework_id,))
+        conn.commit()
+
+        await safe_reply(update, context, f"Домашнее задание пользователя {user_id_to_decline} отклонено.")
+
+        # Отправляем уведомление пользователю
+        await context.bot.send_message(chat_id=user_id_to_decline, text="Ваше домашнее задание отклонено администратором. Попробуйте еще раз.")
+
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при отклонении домашнего задания: {e}")
+        await safe_reply(update, context, "Произошла ошибка при отклонении домашнего задания. Попробуйте позже.")
+
+#18-03 16-50 Perplexity
+@handle_telegram_errors
+async def decline_homework(update: Update, context: CallbackContext, user_id_to_decline: str):
+    """Handles homework declining by an admin."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    try:
+        #  Get last homework id
+        cursor.execute("""
+               SELECT hw_id
+                FROM homeworks
+                WHERE user_id = ?
+                ORDER BY submission_time DESC
+                LIMIT 1
+        """, (user_id_to_decline,))
+        result = cursor.fetchone()
+        homework_id = result[0] if result else None
+        logger.info(f"  админ реджектнул - домашка = {homework_id}")
+        if homework_id is None:
+            await safe_reply(update, context, "У этого пользователя нет домашки на реджект.")
+            return
+
+        # Обновляем статус домашнего задания
+        cursor.execute("UPDATE homeworks SET status = 'отклонено' WHERE hw_id = ?", (homework_id,))
+        conn.commit()
+
+        await safe_reply(update, context, f"Домашнее задание пользователя {user_id_to_decline} реджектнуто.")
+
+        # Отправляем уведомление пользователю
+        await context.bot.send_message(chat_id=user_id_to_decline, text="Ваше домашнее задание реджектнуто администратором!")
+
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при реджекте домашнего задания: {e}")
+        await safe_reply(update, context, "Произошла ошибка при реджекте домашнего задания. Попробуйте позже.")
 
 
+@handle_telegram_errors
 async def reject_homework( update: Update, context: CallbackContext,  hw_id: int):
     """    ОТклоняет домашнее задание    """
     db = DatabaseConnection()
@@ -3867,7 +4295,7 @@ async def reject_homework( update: Update, context: CallbackContext,  hw_id: int
 # TODO: 3. Modify your main menu and `courses.json` to include the bonus purchase option.
 # TODO: 4. You can extend function `recalculate_trust` to call it via schedule
 
-
+@handle_telegram_errors
 def spend_tokens( user_id: int, amount: int, reason: str):
     """Списывает жетоны у пользователя."""
     db = DatabaseConnection()
@@ -3901,7 +4329,7 @@ def spend_tokens( user_id: int, amount: int, reason: str):
         logger.error(f"Ошибка при списании жетонов у пользователя {user_id}: {e}")
         raise
 
-
+@handle_telegram_errors
 def get_token_balance( user_id: int):
     """Возвращает текущий баланс жетонов пользователя."""
     db = DatabaseConnection()
@@ -3916,7 +4344,7 @@ def get_token_balance( user_id: int):
         logger.error(f"Ошибка при получении баланса пользователя {user_id}: {e}")
         return 0
 
-
+@handle_telegram_errors
 async def show_token_balance( update: Update, context: CallbackContext):
     """Показывает баланс жетонов пользователя."""
     db = DatabaseConnection()
@@ -3926,7 +4354,7 @@ async def show_token_balance( update: Update, context: CallbackContext):
     balance = get_token_balance(user_id)
     await update.message.reply_text(f"У вас {balance} АнтКоинов.")
 
-
+@handle_telegram_errors
 async def buy_lootbox( update: Update, context: CallbackContext):
     """Обрабатывает покупку лутбокса."""
     db = DatabaseConnection()
@@ -3963,7 +4391,7 @@ async def buy_lootbox( update: Update, context: CallbackContext):
         logger.error(f"Необработанная ошибка при покупке лутбокса пользователем {user_id}: {e}")
         await update.message.reply_text("Произошла необработанная ошибка. Попробуйте позже.")
 
-
+@handle_telegram_errors
 def roll_lootbox(conn: sqlite3.Connection, box_type: str):
     """Определяет награду из лутбокса."""
     db = DatabaseConnection()
@@ -3989,7 +4417,7 @@ def roll_lootbox(conn: sqlite3.Connection, box_type: str):
         logger.error(f"Ошибка при определении награды из лутбокса {box_type}: {e}")
         return "ошибка"
 
-
+@handle_telegram_errors
 async def reminders( update: Update, context: CallbackContext):
     db = DatabaseConnection()
     conn = db.get_connection()
@@ -4592,8 +5020,7 @@ def get_average_homework_time( user_id):
         return "Нет данных"
 
 
-async def handle_admin_approval( update: Update,
-                                context: CallbackContext):
+async def handle_admin_approval( update: Update,   context: CallbackContext):
     """Handles admin approval actions (approve or reject) and requests a comment."""
     db = DatabaseConnection()
     conn = db.get_connection()
@@ -4864,8 +5291,7 @@ async def show_stats( update: Update, context: CallbackContext):
 
 
 # Отклоняет скидку администратором.*
-async def admin_approve_discount( update: Update,
-                                 context: CallbackContext):
+async def admin_approve_discount( update: Update, context: CallbackContext):
     """Подтверждает скидку администратором."""
     query = update.callback_query
     await query.answer()
@@ -4882,8 +5308,7 @@ async def admin_approve_discount( update: Update,
 
 
 # Отклоняет скидку администратором.*
-async def admin_reject_discount( update: Update,
-                                context: CallbackContext):
+async def admin_reject_discount( update: Update, context: CallbackContext):
     """Отклоняет скидку администратором."""
     query = update.callback_query
     await query.answer()
@@ -4924,8 +5349,7 @@ async def admin_approve_purchase( update: Update,  context: CallbackContext):
 
 
 # Отклоняет покупку админом.*
-async def admin_reject_purchase( update: Update,
-                                context: CallbackContext):
+async def admin_reject_purchase( update: Update,    context: CallbackContext):
     """Отклоняет покупку админом."""
     query = update.callback_query
     await query.answer()
