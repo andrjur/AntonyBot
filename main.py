@@ -49,22 +49,15 @@ class Course:
         self.course_name = course_name
         self.course_type = course_type
         self.code_word = code_word
-<<<<<<< HEAD
+
         # Extract tariff from course_id
         self.tariff = course_id.split('_')[1] if '_' in course_id else 'default'
-=======
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
         self.price_rub = price_rub
         self.price_tokens = price_tokens
 
     def __str__(self):
-<<<<<<< HEAD
-        return f"Course(id={self.course_id}, name={self.course_name}, type={self.course_type}, tariff={self.tariff}, code={self.code_word})"
-=======
         return f"Course(id={self.course_id}, name={self.course_name}, type={self.course_type}, code={self.code_word}, price_rub={self.price_rub}, price_tokens={self.price_tokens})"
 
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
-# Настройка логирования
 
 class CustomFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
