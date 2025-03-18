@@ -49,22 +49,15 @@ class Course:
         self.course_name = course_name
         self.course_type = course_type
         self.code_word = code_word
-<<<<<<< HEAD
+
         # Extract tariff from course_id
         self.tariff = course_id.split('_')[1] if '_' in course_id else 'default'
-=======
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
         self.price_rub = price_rub
         self.price_tokens = price_tokens
 
     def __str__(self):
-<<<<<<< HEAD
-        return f"Course(id={self.course_id}, name={self.course_name}, type={self.course_type}, tariff={self.tariff}, code={self.code_word})"
-=======
         return f"Course(id={self.course_id}, name={self.course_name}, type={self.course_type}, code={self.code_word}, price_rub={self.price_rub}, price_tokens={self.price_tokens})"
 
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
-# Настройка логирования
 
 class CustomFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
@@ -1043,60 +1036,40 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
     user = update.effective_user
     user_id = user.id
     logger.info(f" show_main_menu {user} --- ")
-<<<<<<< HEAD
+
     # 1. Получаем количество токенов пользователя
-=======
-    # 1. Get user's tokens
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
     cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
     tokens_data = cursor.fetchone()
     tokens = tokens_data[0] if tokens_data else 0
 
-<<<<<<< HEAD
+
     # 2. Получаем информацию о следующем бонусе
     next_bonus_info = await get_next_bonus_info(conn, cursor, user_id)
 
     # 3. Формируем сообщение
     # Преобразуем токены в монеты
-    bronze_coins = tokens % 10  #  1 BRONZE_COIN = 1 токен
-    tokens //= 10 # остались десятки 
+    bronze_coins = tokens % 10  # 1 BRONZE_COIN = 1 токен
+    tokens //= 10  # остались десятки
     silver_coins = tokens % 10  # 1 SILVER_COIN = 10 токенов
-    tokens //= 10 # остались сотки 
-    gold_coins = tokens % 10   # 1 GOLD_COIN = 100 токенов
-    tokens //= 10 # остались тыщи 
+    tokens //= 10  # остались сотки
+    gold_coins = tokens % 10  # 1 GOLD_COIN = 100 токенов
+    tokens //= 10  # остались тыщи
     platinum_coins = tokens  # 1 GEM_COIN = 1000 токенов
 
     # Формируем строку с монетами
-    coins_display = (   
+    coins_display = (
         f"{PLATINUM_COIN}x{platinum_coins}"
         f"{GOLD_COIN}x{gold_coins}"
         f"{SILVER_COIN}x{silver_coins}"
-        f"{BRONZE_COIN}x{bronze_coins}"       
+        f"{BRONZE_COIN}x{bronze_coins}"
     )
-    tokens = tokens_data[0] if tokens_data else 0 # просто считали заново
+    tokens = tokens_data[0] if tokens_data else 0  # просто считали заново
 
     message = f"Ваши antCoins: {tokens}   {coins_display}\n"
     message += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
     message += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
 
-     # 4. Получаем доступные товары для покупки
-    products_message = await get_available_products(conn, cursor, tokens)
-    message += products_message
-    try:
-       # Получаем ID активного курса
-        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user.id,))
-        active_course_data = cursor.fetchone()
-        logger.info(f" Активный курс пользователя: = {active_course_data} ---- ")
-=======
-    # 2. Get next bonus information
-    next_bonus_info = await get_next_bonus_info(conn, cursor, user_id)
-
-    # 3. Construct the message
-    message = f"Ваши antCoins: {tokens}\n"
-    message += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
-    message += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
-
-    # 4. Get available products for purchase
+    # 4. Получаем доступные товары для покупки
     products_message = await get_available_products(conn, cursor, tokens)
     message += products_message
     try:
@@ -1104,8 +1077,6 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user.id,))
         active_course_data = cursor.fetchone()
         logger.info(f" active_course_data= {active_course_data} ---- ")
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
-
         if not active_course_data or not active_course_data[0]:
             message_text = "Активируйте курс с помощью кодового слова."
             await safe_reply(update, context, message_text)
@@ -1116,11 +1087,7 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         active_course_id = active_course_id_full.split("_")[0]
         active_tariff = active_course_id_full.split("_")[1] if len(active_course_id_full.split("_")) > 1 else "default"
 
-<<<<<<< HEAD
        # Получаем данные о типе курса и прогрессе
-=======
-        # Data of course
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
         cursor.execute(
             """
             SELECT course_type, progress
@@ -1137,18 +1104,18 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
             course_type, progress = "unknown", 0  # Установите значения по умолчанию
         else:
             course_type, progress = course_data
-<<<<<<< HEAD
+
         logger.info(f" Тип курса: {course_type=} Прогресс: {progress=} ------ ")
-=======
+
         logger.info(f" {course_type=} {progress=} ------ ")
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
+
         # Notifications
         cursor.execute(
             "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
             (user.id,),
         )
         settings = cursor.fetchone()
-<<<<<<< HEAD
+
         logger.info(f"Настройки уведомлений:  {settings=}  ------- ")
         morning_time = settings[0] if settings and len(settings) > 0 else "Not set"  # CHECK LENGHT
         evening_time = settings[1] if settings and len(settings) > 1 else "Not set"  # CHECK LENGHT
@@ -1157,7 +1124,7 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user.id,))
         name_data = cursor.fetchone()
         logger.info(f" Имя пользователя:  {name_data=}  -------- ")
-=======
+
         logger.info(f" {settings=}  ------- ")
         morning_time = settings[0] if settings and len(settings) > 0 else "Not set"  # CHECK LENGHT
         evening_time = settings[1] if settings and len(settings) > 1 else "Not set"  # CHECK LENGHT
@@ -1166,7 +1133,7 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
         cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user.id,))
         name_data = cursor.fetchone()
         logger.info(f" {name_data=}  -------- ")
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
+
 
         if name_data and len(name_data) > 0:
             full_name = name_data[0]
@@ -1175,10 +1142,8 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
             logger.warning(f"Не найдено имя пользователя {user.id} в базе данных")
         logger.info(f" {full_name=}  --------- ")
 
-<<<<<<< HEAD
+
         # Получаем статус домашнего задания
-=======
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
         homework = await get_homework_status_text(conn, cursor, user.id, active_course_id_full)
 
         logger.info(f" {homework=}  --------- ")
@@ -1220,11 +1185,8 @@ async def show_main_menu(conn: sqlite3.Connection, cursor: sqlite3.Cursor, updat
             [InlineKeyboardButton("🙋 ПоДдержка", callback_data="support")],
         ]
 
-<<<<<<< HEAD
+
         # ADD DYNAMIC BUTTON для предварительных материалов
-=======
-        # ADD DYNAMIC BUTTON
->>>>>>> 6c1120c9a0d0dd441d48859a3e7afffa306ebfc2
         # Find lesson
         next_lesson = progress + 1
 
