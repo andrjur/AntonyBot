@@ -1,5 +1,6 @@
 # utils.py
 import logging
+import sqlite3
 from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 from telegram.error import TelegramError
@@ -82,3 +83,72 @@ def old_handle_telegram_errors(func):
             logger.error(f"General Error: {e}")
 
     return wrapper
+
+
+def is_admin(user_id: int) -> bool:
+    """Check if user is an admin."""
+    db = DatabaseConnection()
+    cursor = db.get_cursor()
+    cursor.execute("SELECT level FROM admins WHERE admin_id = ?", (user_id,))
+    result = cursor.fetchone()
+    return bool(result)
+
+
+def escape_markdown_v2(text):
+    """Экранирует специальные символы для Markdown V2."""
+    escape_chars = r"_*[]()~`>#+-=|{}.!"
+    return "".join(f"\\{char}" if char in escape_chars else char for char in text)
+
+
+def parse_delay_from_filename(filename):
+    """Extracts delay time from filename."""
+    match = DELAY_PATTERN.search(filename)
+    if not match:
+        return None
+
+    value, unit = match.groups()
+    value = int(value)
+
+    if unit == "m":  # minutes
+        return value * 60
+    elif unit == "h":  # hours
+        return value * 3600
+    return None
+
+async def send_file(bot, chat_id, file_path, file_name):
+    """Sends file to user with improved error handling and detailed logging."""
+    # ... move the send_file implementation here ...
+
+def get_date(date_string: str):
+    """Converts a date string from the format %Y-%m-%d to a date object."""
+    try:
+        return datetime.strptime(date_string, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+def format_date(date: date):
+    """Formats a date object to a string in the format %Y-%m-%d."""
+    return date.strftime("%Y-%m-%d")
+
+def get_ad_message():
+    """Возвращает рекламное сообщение """
+    courses = load_courses()
+    courses_for_bonus = [course for course in courses if "bonus_price" in course]
+    if courses_for_bonus:
+        ad_message = "Хотите больше контента?\n"
+        for course in courses_for_bonus:
+            ad_message += (
+                f"- Курс '{course['course_name']}' можно приобрести за {course['bonus_price']} antCoins.\n"
+            )
+        return ad_message
+    else:
+        return "У нас много интересного! Узнайте больше о доступных курсах и возможностях."
+
+
+def maybe_add_ad(message_list):
+    """Adds an ad message to the list based on the configured percentage."""
+    ad_percentage = load_ad_config().get("ad_percentage", 0.3)  # Ensure ad_config is loaded
+    if len(message_list) > 0 and random.random() < ad_percentage:
+        ad_message = get_ad_message()  # Function to get a promotional message
+        message_list.append(ad_message)  # Add it at the end or a random position
+    return message_list

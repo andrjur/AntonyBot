@@ -8,6 +8,7 @@ from telegram.ext import CallbackContext
 # Импортируем функции из utils.py
 from utils import safe_reply
 
+# Configuration constants
 DATABASE_FILE = "bot_db.sqlite"
 BONUSES_FILE = "bonuses.json"
 COURSE_DATA_FILE = "courses.json"
@@ -16,7 +17,11 @@ DELAY_MESSAGES_FILE = "delay_messages.txt"
 
 logger = logging.getLogger(__name__)
 
+# User data cache
+USER_CACHE = {}
+
 class DatabaseConnection:
+    """Singleton class for database connection management"""
     _instance = None
 
     def __new__(cls, db_file=DATABASE_FILE):
@@ -25,32 +30,36 @@ class DatabaseConnection:
             try:
                 cls._instance.conn = sqlite3.connect(db_file)
                 cls._instance.cursor = cls._instance.conn.cursor()
-                logger.info(f"DatabaseConnection: Подключение к {db_file}")
+                logger.info(f"DatabaseConnection: Connected to {db_file}")
             except sqlite3.Error as e:
-                logger.error(f"DatabaseConnection: Ошибка при подключении к базе данных: {e}")
+                logger.error(f"DatabaseConnection: Database connection error: {e}")
                 cls._instance.conn = None
                 cls._instance.cursor = None
         return cls._instance
 
     def get_connection(self):
+        """Returns the SQLite connection object"""
         return self.conn
 
     def get_cursor(self):
+        """Returns the SQLite cursor object"""
         return self.cursor
 
     def close(self):
+        """Closes the database connection"""
         if self.conn:
             self.conn.close()
-            logger.info("DatabaseConnection: Соединение с базой данных закрыто.")
+            logger.info("DatabaseConnection: Database connection closed")
             self.conn = None
             self.cursor = None
 
+# Database schema management
 def create_all_tables():
-    """Создает все необходимые таблицы, если они еще не существуют."""
+    """Creates all necessary tables if they don't exist"""
     db = DatabaseConnection()
     conn = db.get_connection()
     cursor = db.get_cursor()
-    logger.info("Таблицы SQL создаются или проверяются на существование...")
+    logger.info("Creating or verifying SQL tables...")
 
     try:
         cursor.executescript(
@@ -101,7 +110,8 @@ def create_all_tables():
 
             CREATE TABLE IF NOT EXISTS user_tokens (
                 user_id INTEGER PRIMARY KEY,
-                tokens INTEGER DEFAULT 0
+                tokens INTEGER DEFAULT 0,
+                last_bonus_date TEXT
             );
 
             CREATE TABLE IF NOT EXISTS transactions (
@@ -154,7 +164,22 @@ def create_all_tables():
                 PRIMARY KEY (referrer_id, referred_user_id),
                 FOREIGN KEY(referrer_id) REFERENCES users(user_id),
                 FOREIGN KEY(referred_user_id) REFERENCES users(user_id)
-);
+            );
+            CREATE TABLE IF NOT EXISTS user_bonuses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                bonus_amount REAL NOT NULL,
+                expiry_date DATETIME NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS user_discounts (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER,
+                amount INTEGER,
+                expiry_date TEXT,
+                used INTEGER DEFAULT 0
+            );
 
             CREATE TABLE IF NOT EXISTS user_courses (
                 user_id INTEGER,
@@ -168,133 +193,105 @@ def create_all_tables():
             );
             """
         )
-        conn.commit()
-        logger.info("Таблицы успешно созданы или уже существовали.")
+        if conn:  # Check if connection exists before committing
+            conn.commit()
+        logger.info("Tables successfully created or already existed")
     except sqlite3.Error as e:
-        logger.error(f"Ошибка при создании таблиц: {e}")
+        logger.error(f"Error creating tables: {e}")
 
-USER_CACHE = {}
-
+# User data management
 def get_user_data(user_id: int):
-    """Получает данные пользователя из базы данных."""
+    """Gets user data from database with caching"""
     if user_id in USER_CACHE:
-        logger.info(f" в кэше нашли ")
+        logger.info("Found in cache")
         return USER_CACHE[user_id]
+    
     db = DatabaseConnection()
-    conn = db.get_connection()
     cursor = db.get_cursor()
 
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     data = cursor.fetchone()
     if data:
-        logger.info(f" запишем ка в кэш")
+        logger.info("Caching user data")
         USER_CACHE[user_id] = data
         return data
-    logger.warning(f" нету нихрена")
+    logger.warning("User not found")
     return None
 
 def clear_user_cache(user_id: int):
-    """Очищает кэш для указанного пользователя."""
-    logger.info(f" clear_user_cache {user_id} очистили")
+    """Clears cached data for specified user"""
+    logger.info(f"Clearing cache for user {user_id}")
     if user_id in USER_CACHE:
         del USER_CACHE[user_id]
 
+# Error handling
 async def handle_error(update: Update, context: CallbackContext, error: Exception):
-    """Handles errors that occur in the bot."""
-    db = DatabaseConnection()
-    conn = db.get_connection()
-    cursor = db.get_cursor()
+    """Handles bot errors"""
+    logger.error(f"Error occurred: {error}")
 
-    logger.error(f"Произошла ошибка:: {error}")
-
-def load_payment_info(filename):
-    """Загружает данные оплаты из JSON файла."""
+# Configuration loaders
+def load_payment_info(filename: str) -> dict:
+    """Loads payment data from JSON file"""
     try:
         with open(filename, "r", encoding="utf-8") as f:
             data = json.load(f)
-            logger.info(f"Файл с данными об оплате: {filename}")
+            logger.info(f"Payment data file loaded: {filename}")
             return data
-    except FileNotFoundError:
-        logger.error(f"Файл с данными об оплате не найден: {filename}")
-        return {}
-    except json.JSONDecodeError:
-        logger.error(f"Ошибка при чтении JSON файла: {filename}")
-        return {}
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке данных об оплате: {e}")
+    except (FileNotFoundError, json.JSONDecodeError, Exception) as e:
+        logger.error(f"Error loading payment data: {e}")
         return {}
 
-def load_bonuses():
-    """Загружает настройки бонусов из файла."""
+def load_bonuses() -> dict:
+    """Loads bonus settings with defaults"""
+    default_bonuses = {
+        "monthly_bonus": 1,
+        "birthday_bonus": 5,
+        "referral_bonus": 2,
+        "bonus_check_interval": 86400,  # 24 hours
+    }
+    
     try:
         with open(BONUSES_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except FileNotFoundError:
-        logger.error(f"Файл {BONUSES_FILE} не найден. Используются значения по умолчанию.")
-        return {
-            "monthly_bonus": 1,
-            "birthday_bonus": 5,
-            "referral_bonus": 2,
-            "bonus_check_interval": 86400,  # 24 hours
-        }
-    except json.JSONDecodeError:
-        logger.error(f"Ошибка при чтении JSON из файла {BONUSES_FILE}. Используются значения по умолчанию.")
-        return {
-            "monthly_bonus": 1,
-            "birthday_bonus": 5,
-            "referral_bonus": 2,
-            "bonus_check_interval": 86400,  # 24 hours
-        }
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.error(f"Error loading bonuses, using defaults: {e}")
+        return default_bonuses
 
-def load_courses():
-    """Загружает список курсов из файла."""
+def load_courses() -> list:
+    """Loads course list"""
     try:
         with open(COURSE_DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except FileNotFoundError:
-        logger.error(f"Файл {COURSE_DATA_FILE} не найден.")
-        return []
-    except json.JSONDecodeError:
-        logger.error(f"Ошибка при чтении JSON из файла {COURSE_DATA_FILE}.")
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.error(f"Error loading courses: {e}")
         return []
 
-def load_ad_config():
-    """Загружает конфигурацию рекламы из файла."""
+def load_ad_config() -> dict:
+    """Loads advertising configuration"""
+    default_config = {"ad_percentage": 0.3}
     try:
         with open(AD_CONFIG_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except FileNotFoundError:
-        logger.error(f"Файл {AD_CONFIG_FILE} не найден. Используются значения по умолчанию.")
-        return {"ad_percentage": 0.3}  # Default 5% ad percentage
-    except json.JSONDecodeError:
-        logger.error(f"Ошибка при чтении JSON из файла {AD_CONFIG_FILE}. Используются значения по умолчанию.")
-        return {"ad_percentage": 0.3}
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.error(f"Error loading ad config, using defaults: {e}")
+        return default_config
 
-def load_course_data(filename):
-    """Загружает данные о курсах из JSON файла."""
+def load_course_data(filename: str) -> dict:
+    """Loads course data from JSON file"""
     try:
         with open(filename, "r", encoding="utf-8") as f:
             return json.load(f)
-    except FileNotFoundError:
-        logger.error(f"Файл с данными о курсах не найден: {filename}")
-        return {}
-    except json.JSONDecodeError:
-        logger.error(f"Ошибка при чтении JSON файла: {filename}")
-        return {}
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке данных о курсах: {e}")
+    except (FileNotFoundError, json.JSONDecodeError, Exception) as e:
+        logger.error(f"Error loading course data: {e}")
         return {}
 
-def load_delay_messages(file_path=DELAY_MESSAGES_FILE):
-    """Загружает список фраз из текстового файла."""
+def load_delay_messages(file_path: str = DELAY_MESSAGES_FILE) -> list:
+    """Loads delay messages from text file"""
     try:
         with open(file_path, "r", encoding="utf-8") as file:
             messages = [line.strip() for line in file if line.strip()]
-            logger.info(f"Загружено {len(messages)} фразочек")
-        return messages
-    except FileNotFoundError:
-        logger.error(f"Файл c фразами не найден: {file_path}")
-        return ["Сообщение не найдено."]
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке фраз: {e}")
-        return ["Ошибка загрузки сообщения."]
+            logger.info(f"Loaded {len(messages)} messages")
+            return messages
+    except (FileNotFoundError, Exception) as e:
+        logger.error(f"Error loading delay messages: {e}")
+        return ["Message not found"]
