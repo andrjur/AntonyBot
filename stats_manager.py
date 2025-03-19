@@ -1,7 +1,9 @@
 import logging
-from database import DatabaseConnection
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
+from database import DatabaseConnection
+from utils import safe_reply
+from constants import HOMEWORK_STATUS
 
 logger = logging.getLogger(__name__)
 

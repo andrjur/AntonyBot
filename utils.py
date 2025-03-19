@@ -1,24 +1,14 @@
 # utils.py
 import logging
-import sqlite3
 from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 from telegram.error import TelegramError
 
 logger = logging.getLogger(__name__)
 
-
 async def safe_reply(update: Update, context: CallbackContext, text: str,
-                     reply_markup: InlineKeyboardMarkup | None = None):
-    """
-    Безопасно отправляет текстовое сообщение, автоматически определяя тип update.
-
-    Args:
-        update: Объект Update от Telegram.
-        context: Объект CallbackContext.
-        text: Текст сообщения для отправки.
-        reply_markup: (необязательный) Объект InlineKeyboardMarkup для добавления к сообщению.
-    """
+                    reply_markup: InlineKeyboardMarkup | None = None):
+    """Safely sends a text message."""
     # Get user ID safely, handling None case
     user_id = update.effective_user.id if update.effective_user else None
     if user_id is None:
@@ -95,7 +85,7 @@ def is_admin(user_id: int) -> bool:
 
 
 def escape_markdown_v2(text):
-    """Экранирует специальные символы для Markdown V2."""
+    """Escapes special characters for Markdown V2."""
     escape_chars = r"_*[]()~`>#+-=|{}.!"
     return "".join(f"\\{char}" if char in escape_chars else char for char in text)
 

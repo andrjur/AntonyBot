@@ -1,23 +1,19 @@
 # main.py
+# Standard library imports
 import logging
-import sqlite3
 import os
-from datetime import datetime, timedelta, date
-import time 
-import json
-import random
-import re
-import asyncio
+from datetime import datetime, timedelta
 import mimetypes
 from typing import Callable
-from dotenv import load_dotenv
 
+# Third-party imports
 from telegram import (
     Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
+    InlineKeyboardMarkup
 )
 from telegram.ext import (
+    Application,  
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -25,73 +21,61 @@ from telegram.ext import (
     CallbackContext,
     CallbackQueryHandler,
     ConversationHandler,
-    PicklePersistence,
-    ContextTypes,
+    PicklePersistence
 )
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from dotenv import load_dotenv
 
 # Local imports
-from database import DatabaseConnection, create_all_tables, load_courses, load_bonuses, load_ad_config
-from menu_manager import MenuManager, show_main_menu
-from course_manager import CourseManager, Course
-from utils import safe_reply, handle_telegram_errors, is_admin, get_date, format_date, get_ad_message, maybe_add_ad
-from shop_manager import ShopManager
-from purchase_manager import PurchaseManager
-from stats_manager import StatsManager
-from reminder_manager import ReminderManager
-from token_manager import TokenManager 
-from gallery_manager import GalleryManager 
-from support_manager import SupportManager 
-from scheduler_manager import SchedulerManager
-from conversation_manager import ConversationManager
-from admin_manager import AdminManager
-
-
-
-
-# Configure logging
-class CustomFormatter(logging.Formatter):
-    def formatTime(self, record, datefmt=None):
-        full_time = super().formatTime(record, datefmt)
-        return full_time[-9:]
-
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler("bot.log", encoding="utf-8"),
-        logging.StreamHandler()
-    ],
+from database import (
+    DatabaseConnection,
+    create_all_tables,
+    load_courses,
+    load_bonuses,
+    load_ad_config
+)
+from utils import safe_reply, handle_telegram_errors
+from constants import (
+    TOKEN,
+    ADMIN_GROUP_ID,
+    ADMIN_IDS,
+    CONFIG_FILES,
+    DEFAULT_LESSON_INTERVAL,
+    DEFAULT_LESSON_DELAY_HOURS,
+    TOKEN_TO_RUB_RATE,
+    HARD_CODE_DELAY,
+    PERSISTENCE_FILE,
+    DELAY_PATTERN,
+    COMMUNITY_CHAT_URL
 )
 
-for handler in logging.getLogger().handlers:
-    handler.setFormatter(CustomFormatter('%(asctime)s - %(levelname)s - %(message)s'))
+# Manager imports
+from menu_manager import MenuManager
+from reminder_manager import ReminderManager
+from shop_manager import ShopManager
+from course_manager import CourseManager, Course  # Updated import path
+from purchase_manager import PurchaseManager
+from stats_manager import StatsManager
+from token_manager import TokenManager
+from gallery_manager import GalleryManager
+from support_manager import SupportManager
+from scheduler_manager import SchedulerManager
+from admin_manager import AdminManager
+from conversation_manager import ConversationManager
 
-logger = logging.getLogger(__name__)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# Remove these as they're now in constants.py
+# TARIFFS_FILE = "tariffs.json"
+# COURSE_DATA_FILE = "courses.json"
+# AD_CONFIG_FILE = "ad_config.json"
+# BONUSES_FILE = "bonuses.json"
+# DELAY_MESSAGES_FILE = "delay_messages.txt"
+# PAYMENT_INFO_FILE = "payment_info.json"
+# DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")
 
-# Load environment variables
-load_dotenv()
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
-ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",") if os.getenv("ADMIN_IDS") else []
-
-# Constants
-HARD_CODE_DELAY = 5  # seconds
-# Интервал между уроками по умолчанию (в часах)
-DEFAULT_LESSON_INTERVAL = 0.1  # интервал уроков 72 часа а не 6 минут!!!
-DEFAULT_LESSON_DELAY_HOURS = 3
-TOKEN_TO_RUB_RATE = 100
-
-# File paths
-TARIFFS_FILE = "tariffs.json"
-COURSE_DATA_FILE = "courses.json"
-AD_CONFIG_FILE = "ad_config.json"
-BONUSES_FILE = "bonuses.json"
-DELAY_MESSAGES_FILE = "delay_messages.txt"
-PAYMENT_INFO_FILE = "payment_info.json"
+# Update persistence initialization
+persistence = PicklePersistence(filepath=PERSISTENCE_FILE)
 
 # Initialize database and managers
 db = DatabaseConnection()
@@ -299,56 +283,6 @@ async def handle_text_message(update: Update, context: CallbackContext):
         logger.error(f"Error in handle_text_message: {e}")
         await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
 
- 
-@handle_telegram_errors
-def spend_tokens( user_id: int, amount: int, reason: str):
-    """Списывает жетоны у пользователя."""
-    db = DatabaseConnection()
-    conn = db.get_connection()
-    cursor = db.get_cursor()
-    try:
-        with conn:
-            # Проверяем баланс
-            cursor = conn.cursor()
-            cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
-            balance_data = cursor.fetchone()
-            if not balance_data or balance_data[0] < amount:
-                raise ValueError("Недостаточно жетонов")
-
-            # Списываем жетоны
-            cursor.execute(
-                "UPDATE user_tokens SET tokens = tokens - ? WHERE user_id = ?",
-                (amount, user_id),
-            )
-
-            # Логируем транзакцию
-            cursor.execute(
-                """
-                INSERT INTO transactions (user_id, action, amount, reason)
-                VALUES (?, ?, ?, ?)
-            """,
-                (user_id, "spend", amount, reason),
-            )
-        logger.info(f"Списано {amount} жетонов у пользователя {user_id} по причине: {reason}")
-    except sqlite3.Error as e:
-        logger.error(f"Ошибка при списании жетонов у пользователя {user_id}: {e}")
-        raise
-
-@handle_telegram_errors
-def get_token_balance( user_id: int):
-    """Возвращает текущий баланс жетонов пользователя."""
-    db = DatabaseConnection()
-    conn = db.get_connection()
-    cursor = db.get_cursor()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
-        balance_data = cursor.fetchone()
-        return balance_data[0] if balance_data else 0
-    except sqlite3.Error as e:
-        logger.error(f"Ошибка при получении баланса пользователя {user_id}: {e}")
-        return 0
-
 
 def parse_delay_from_filename( filename):
     """
@@ -430,7 +364,6 @@ async def send_file(bot, chat_id, file_path, file_name):
         )
 
 
-
 async def check_last_lesson( update: Update, context: CallbackContext):
     """Checks the number of remaining lessons in the course and shows InlineKeyboard."""
     db = DatabaseConnection()
@@ -489,7 +422,7 @@ async def check_last_lesson( update: Update, context: CallbackContext):
             keyboard = [
                 [
                     InlineKeyboardButton(
-                        "Перейти в чат болтать", url="https://t.me/+-KUbE8NM7t40ZDky"
+                        "Перейти в чат болтать", url=COMMUNITY_CHAT_URL
                     )
                 ]
             ]
@@ -525,7 +458,10 @@ async def error_handler(update: Update, context: CallbackContext):
         except Exception as e:
             logger.error(f"Failed to send error message to admin {admin_id}: {e}")
 
-def setup_handlers(application, conv_handler, menu_manager, reminder_manager, shop_manager, course_manager, gallery_manager, support_manager):
+def setup_handlers(application: Application, conv_handler: ConversationHandler, 
+                  menu_manager: MenuManager, reminder_manager: ReminderManager,
+                  shop_manager: ShopManager, course_manager: CourseManager,
+                  gallery_manager: GalleryManager, support_manager: SupportManager) -> None:
     """Sets up all handlers for the application."""
     application.add_handler(conv_handler)
 
@@ -597,8 +533,8 @@ def main():
             'reminder': ReminderManager(),
             'shop': ShopManager(
                 admin_group_id=ADMIN_GROUP_ID,
-                tariffs_file=TARIFFS_FILE,
-                payment_info_file=PAYMENT_INFO_FILE
+                tariffs_file=CONFIG_FILES["TARIFFS"],
+                payment_info_file=CONFIG_FILES["PAYMENT_INFO"]
             ),
             'course': CourseManager(),
             'purchase': PurchaseManager(
@@ -630,16 +566,19 @@ def main():
         conv_handler = conversation_manager.create_conversation_handler()
         
         # Set up all handlers
-        setup_handlers(
-            application, 
-            conv_handler, 
-            managers['menu'], 
-            managers['reminder'], 
-            managers['shop'], 
-            managers['course'],
-            managers['gallery'],
-            managers['support']
-        )
+        if __name__ == "__main__":
+            # Move these handlers into setup_handlers function
+            setup_handlers(
+                application, 
+                conv_handler, 
+                managers['menu'], 
+                managers['reminder'], 
+                managers['shop'], 
+                managers['course'],
+                managers['gallery'],
+                managers['support']
+            )
+            main()
         
         # Set up remaining handlers
         application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
@@ -670,7 +609,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
     # Add homework approval handlers
     application.add_handler(CallbackQueryHandler(
         course_manager.handle_homework_approval,

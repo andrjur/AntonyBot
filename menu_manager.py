@@ -3,13 +3,15 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 from database import DatabaseConnection
 from utils import safe_reply
-
+from constants import ADMIN_IDS
+ 
 logger = logging.getLogger(__name__)
 
 class MenuManager:
     def __init__(self):
         self.db = DatabaseConnection()
 
+    @handle_telegram_errors
     async def show_main_menu(self, update: Update, context: CallbackContext):
         """Shows the main menu."""
         keyboard = [
