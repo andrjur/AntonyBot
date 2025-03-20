@@ -1,9 +1,11 @@
+#purchase_manager.py
 import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import CallbackContext, ConversationHandler
 from database import DatabaseConnection
-from utils import safe_reply, load_tariffs
+from utils import safe_reply
+from database import load_tariffs
 
 logger = logging.getLogger(__name__)
 

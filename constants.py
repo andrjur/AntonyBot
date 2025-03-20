@@ -1,11 +1,39 @@
+#constants.py
 import os
+import logging
 from datetime import timedelta
+from dotenv import load_dotenv
 
-# Bot Configuration
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", 0))
+class CustomFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        full_time = super().formatTime(record, datefmt)
+        return full_time[-9:]
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler("bot.log", encoding="utf-8"),  # Указываем кодировку utf-8 для файла
+        logging.StreamHandler()  # Для вывода в консоль
+    ],
+)
+
+# Замена стандартного Formatter на пользовательский
+for handler in logging.getLogger().handlers:
+    handler.setFormatter(CustomFormatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+logger = logging.getLogger(__name__)
+
+# Настройка уровня логирования для библиотеки httpx
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+load_dotenv()
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
+
+
 ADMIN_IDS = [int(id_) for id_ in os.getenv("ADMIN_IDS", "").split(",") if id_]
-
+logger.info(f"Admin IDs: {ADMIN_IDS}")
 # Status Constants
 HOMEWORK_STATUS = {
     "PENDING": "pending",
@@ -58,15 +86,19 @@ COMMUNITY_CHAT_URL = "https://t.me/+PZM8JZ93eewzZWNi"
 # Regular Expressions
 DELAY_PATTERN = r"_(\d+)(hour|min|m|h)(?:\.|$)"
 
-
-# Conversation States
-CONVERSATION_STATES = {
-    "WAIT_FOR_NAME": 1,
-    "WAIT_FOR_CODE": 2,
-    "ACTIVE": 3,
-    "WAIT_FOR_SUPPORT": 4,
-    "WAIT_FOR_PAYMENT": 5
-}
+# Define states as constants
+(
+    WAIT_FOR_NAME,
+    WAIT_FOR_CODE,
+    ACTIVE,
+    COURSE_SETTINGS,
+    WAIT_FOR_SUPPORT_TEXT,
+    WAIT_FOR_SELFIE,
+    WAIT_FOR_DESCRIPTION,
+    WAIT_FOR_CHECK,
+    WAIT_FOR_GIFT_USER_ID,
+    WAIT_FOR_PHONE_NUMBER,
+) = range(10)
 
 # Logging Configuration
 LOG_FILE = os.path.join(BASE_DIR, "bot.log")

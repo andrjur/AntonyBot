@@ -92,4 +92,6 @@ class GalleryManager:
             logger.exception(f"Ошибка при получении случайной работы")
             await safe_reply(update, context, "Произошла ошибка при загрузке работы. Попробуйте позже.")
 
+gallery_manager=GalleryManager()
+
 

@@ -1,9 +1,11 @@
+#token_manager.py
 from datetime import datetime, date
 import logging
 import sqlite3
+import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
-from database import DatabaseConnection
+from database import DatabaseConnection, load_bonuses
 from utils import safe_reply
 from datetime import datetime
 
@@ -15,6 +17,29 @@ class TokenManager:
         self.db = DatabaseConnection()
         self.shop_manager = None
         self.bonuses_config = None
+
+    def get_last_bonus_date(self, cursor: sqlite3.Cursor, user_id: int) -> date or None:
+        """Получает дату последнего начисления ежемесячного бонуса."""
+        cursor.execute(
+            """
+            SELECT last_bonus_date FROM users WHERE user_id = ?
+        """,
+            (user_id,),
+        )
+        result = cursor.fetchone()
+        last_bonus_date_str = result[0] if result else None
+        if last_bonus_date_str:
+            return datetime.strptime(last_bonus_date_str, "%Y-%m-%d").date()
+        return None
+
+    def set_last_bonus_date(self, cursor: sqlite3.Cursor, user_id: int, date: date):
+        """Устанавливает дату последнего начисления ежемесячного бонуса."""
+        cursor.execute(
+            """
+            UPDATE users SET last_bonus_date = ? WHERE user_id = ?
+        """,
+            (date.strftime("%Y-%m-%d"), user_id),
+        )
 
     async def roll_lootbox(self, box_type: str):
         """Determines the reward from a lootbox."""
@@ -89,7 +114,7 @@ class TokenManager:
             return
             
     # Add these methods to TokenManager class
-    def add_tokens(self, user_id: int, amount: int, reason: str, update: Update, context: CallbackContext):
+    async def add_tokens(self, user_id: int, amount: int, reason: str, update: Update, context: CallbackContext):
 
         """Начисляет жетоны пользователю, включая различные бонусы."""
         db = DatabaseConnection()
@@ -126,11 +151,11 @@ class TokenManager:
 
                 # Your existing bonus calculations
                 monthly_bonus_amount = bonuses_config.get("monthly_bonus", 1)
-                last_bonus_date = get_last_bonus_date(cursor, user_id)
+                last_bonus_date = self.get_last_bonus_date(cursor, user_id)
                 if not last_bonus_date or (last_bonus_date.year != today.year or last_bonus_date.month != today.month):
                     amount += monthly_bonus_amount
                     reason += f" + Ежемесячный бонус ({monthly_bonus_amount})"
-                    set_last_bonus_date(cursor, user_id, today)
+                    self.set_last_bonus_date(cursor, user_id, today)
                     logger.info(f"Начислен ежемесячный бонус пользователю {user_id}")
 
                 # Keep your birthday bonus logic

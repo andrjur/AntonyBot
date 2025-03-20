@@ -1,3 +1,4 @@
+#remainder_manager.py
 import logging
 import re
 from datetime import datetime
@@ -16,7 +17,7 @@ class ReminderManager:
         """Shows reminder settings."""
         user_id = update.effective_user.id
         cursor = self.db.get_cursor()
-        
+
         cursor.execute(
             "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
             (user_id,)

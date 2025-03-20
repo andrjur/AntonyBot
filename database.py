@@ -4,16 +4,16 @@ import logging
 import json  # Import json
 from telegram import Update
 from telegram.ext import CallbackContext
-
+from constants import CONFIG_FILES
 # Импортируем функции из utils.py
 from utils import safe_reply
 
 # Configuration constants
 DATABASE_FILE = "bot_db.sqlite"
-BONUSES_FILE = "bonuses.json"
-COURSE_DATA_FILE = "courses.json"
-AD_CONFIG_FILE = "ad_config.json"
-DELAY_MESSAGES_FILE = "delay_messages.txt"
+BONUSES_FILE = CONFIG_FILES["BONUSES"]
+COURSE_DATA_FILE = CONFIG_FILES["COURSES"]
+AD_CONFIG_FILE = CONFIG_FILES["AD_CONFIG"]
+DELAY_MESSAGES_FILE = CONFIG_FILES["DELAY_MESSAGES"]
 
 logger = logging.getLogger(__name__)
 
@@ -259,8 +259,9 @@ def load_bonuses() -> dict:
 
 def load_courses() -> list:
     """Loads course list"""
+    course_file = CONFIG_FILES["COURSES"]
     try:
-        with open(COURSE_DATA_FILE, "r", encoding="utf-8") as f:
+        with open(course_file, "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logger.error(f"Error loading courses: {e}")
@@ -269,8 +270,9 @@ def load_courses() -> list:
 def load_ad_config() -> dict:
     """Loads advertising configuration"""
     default_config = {"ad_percentage": 0.3}
+    ad_config_file = CONFIG_FILES["AD_CONFIG"]
     try:
-        with open(AD_CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(ad_config_file, "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logger.error(f"Error loading ad config, using defaults: {e}")
@@ -295,3 +297,21 @@ def load_delay_messages(file_path: str = DELAY_MESSAGES_FILE) -> list:
     except (FileNotFoundError, Exception) as e:
         logger.error(f"Error loading delay messages: {e}")
         return ["Message not found"]
+
+
+# Загружает тарифы из файла.*
+def load_tariffs():
+    """Загружает тарифы из файла."""
+    logger.info(f"load_tariffs  333333 2")
+    tariffs_file = CONFIG_FILES["TARIFFS"]
+    try:
+        with open(tariffs_file, "r", encoding="utf-8") as f:
+            k = json.load(f)
+            logger.info(f"load_tariffs  k={k} 333333 3")
+            return k
+    except FileNotFoundError:
+        logger.error(f"Файл {tariffs_file} не найден.")
+        return []
+    except json.JSONDecodeError:
+        logger.error(f"Ошибка декодирования JSON в файле {tariffs_file}.")
+        return []

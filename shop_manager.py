@@ -1,9 +1,15 @@
+# shop_manager.py
 import logging
+import sqlite3
 import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 from database import DatabaseConnection
 from utils import safe_reply
+from constants import ADMIN_GROUP_ID, CONFIG_FILES
+from database import load_bonuses, load_payment_info
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +43,7 @@ class ShopManager:
         except sqlite3.Error as e:
             logger.error(f"Ошибка при инициализации таблицы lootboxes: {e}")
         self.db = DatabaseConnection()
-        self.admin_group_id = admin_group_id
+        self.admin_group_id = ADMIN_GROUP_ID
         self.tariffs_file = tariffs_file
         self.payment_info_file = payment_info_file
         self.bonuses = load_bonuses()  # Add this line
@@ -428,3 +434,7 @@ class ShopManager:
             # Add logic for item rewards
             return "Предмет добавлен в ваш инвентарь!"
         return "Неизвестная награда"
+
+tariffs_file=CONFIG_FILES["TARIFFS"]
+payment_info_file=CONFIG_FILES["PAYMENT_INFO"]
+shop_manager = ShopManager( ADMIN_GROUP_ID, tariffs_file, payment_info_file)

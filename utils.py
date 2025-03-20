@@ -3,6 +3,7 @@ import logging
 from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 from telegram.error import TelegramError
+from datetime import date
 
 logger = logging.getLogger(__name__)
 

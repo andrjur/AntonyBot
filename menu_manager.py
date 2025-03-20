@@ -1,3 +1,4 @@
+#menu_manager.py
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
@@ -11,7 +12,6 @@ class MenuManager:
     def __init__(self):
         self.db = DatabaseConnection()
 
-    @handle_telegram_errors
     async def show_main_menu(self, update: Update, context: CallbackContext):
         """Shows the main menu."""
         keyboard = [

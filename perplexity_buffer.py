@@ -1,0 +1,28 @@
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("start", start)],
+    states={
+        WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_info)],
+        WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code_words)],
+        ACTIVE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message),
+            CallbackQueryHandler(button_handler),
+            MessageHandler(filters.PHOTO | filters.Document.IMAGE | filters.Document.PHOTO,
+                           handle_homework_submission),
+        ],
+        WAIT_FOR_SUPPORT_TEXT: [MessageHandler((filters.TEXT & ~filters.COMMAND) | filters.PHOTO,
+                                               get_support_text)],
+        WAIT_FOR_SELFIE: [MessageHandler(filters.PHOTO,
+                                         process_selfie)],
+        WAIT_FOR_DESCRIPTION: [MessageHandler(filters.TEXT,
+                                              process_description)],
+        WAIT_FOR_CHECK: [MessageHandler(filters.PHOTO,
+                                        process_check)],
+        WAIT_FOR_GIFT_USER_ID: [MessageHandler(filters.TEXT,
+                                               process_gift_user_id)],
+        WAIT_FOR_PHONE_NUMBER: [MessageHandler(filters.CONTACT,
+                                               process_phone_number)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+    name="my_conversation",
+    allow_reentry=True,
+)

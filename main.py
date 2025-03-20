@@ -1,7 +1,8 @@
 # main.py
-# Standard library imports
 import logging
 import os
+import re
+import time
 from datetime import datetime, timedelta
 import mimetypes
 from typing import Callable
@@ -13,7 +14,7 @@ from telegram import (
     InlineKeyboardMarkup
 )
 from telegram.ext import (
-    Application,  
+    Application,
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -21,7 +22,7 @@ from telegram.ext import (
     CallbackContext,
     CallbackQueryHandler,
     ConversationHandler,
-    PicklePersistence
+    PicklePersistence, ContextTypes
 )
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
@@ -36,7 +37,7 @@ from database import (
     load_bonuses,
     load_ad_config
 )
-from utils import safe_reply, handle_telegram_errors
+from utils import safe_reply, handle_telegram_errors, logger
 from constants import (
     TOKEN,
     ADMIN_GROUP_ID,
@@ -51,28 +52,40 @@ from constants import (
     COMMUNITY_CHAT_URL
 )
 
+from constants import (
+    WAIT_FOR_NAME,
+    WAIT_FOR_CODE,
+    ACTIVE,
+    COURSE_SETTINGS,
+    WAIT_FOR_SUPPORT_TEXT,
+    WAIT_FOR_SELFIE,
+    WAIT_FOR_DESCRIPTION,
+    WAIT_FOR_CHECK,
+    WAIT_FOR_GIFT_USER_ID,
+    WAIT_FOR_PHONE_NUMBER
+)
+
 # Manager imports
-from menu_manager import MenuManager
+from menu_manager import menu_manager
 from reminder_manager import ReminderManager
-from shop_manager import ShopManager
-from course_manager import CourseManager, Course  # Updated import path
+from shop_manager import shop_manager
+from course_manager import course_manager, Course  # Updated import path
 from purchase_manager import PurchaseManager
 from stats_manager import StatsManager
 from token_manager import TokenManager
-from gallery_manager import GalleryManager
-from support_manager import SupportManager
+from gallery_manager import gallery_manager
+from support_manager import support_manager
 from scheduler_manager import SchedulerManager
 from admin_manager import AdminManager
 from conversation_manager import ConversationManager
+from database import load_ad_config, load_course_data, load_delay_messages
+from constants import ADMIN_GROUP_ID, CONFIG_FILES
 
-# Remove these as they're now in constants.py
-# TARIFFS_FILE = "tariffs.json"
-# COURSE_DATA_FILE = "courses.json"
-# AD_CONFIG_FILE = "ad_config.json"
-# BONUSES_FILE = "bonuses.json"
-# DELAY_MESSAGES_FILE = "delay_messages.txt"
-# PAYMENT_INFO_FILE = "payment_info.json"
-# DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")
+load_dotenv()
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
+
+
 
 # Update persistence initialization
 persistence = PicklePersistence(filepath=PERSISTENCE_FILE)
@@ -84,23 +97,23 @@ db = DatabaseConnection()
 # Load configurations
 bonuses_config = None
 
-ad_config = db.load_ad_config()
-course_data = db.load_course_data()
-delay_messages = db.load_delay_messages()
+ad_config = load_ad_config()
+course_data = load_course_data(CONFIG_FILES["COURSES"])
+delay_messages = load_delay_messages()
 
 logger.info(f"Loaded {len(delay_messages)} delay messages")
 
 # не работает, скотина и всё ломает. Оставлена в назидание
-async def logging_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Логирует все входящие сообщения."""
-    try:
-        user_id = update.effective_user.id if update.effective_user else None
-        state = context.user_data['state'] if context.user_data else 'NO_STATE'
-        logger.info(f"Пользователь {user_id} находится в состоянии {state}")
-        return True  # Продолжаем обработку
-    except Exception as e:
-        logger.error(f"Ошибка в logging_middleware: {e}")
-        return True  # Важно не блокировать обработку
+# async def logging_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """Логирует все входящие сообщения."""
+#     try:
+#         user_id = update.effective_user.id if update.effective_user else None
+#         state = context.user_data['state'] if context.user_data else 'NO_STATE'
+#         logger.info(f"Пользователь {user_id} находится в состоянии {state}")
+#         return True  # Продолжаем обработку
+#     except Exception as e:
+#         logger.error(f"Ошибка в logging_middleware: {e}")
+#         return True  # Важно не блокировать обработку
 
 # персистентность
 persistence = PicklePersistence(filepath="bot_data.pkl")
@@ -113,7 +126,7 @@ DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")
 logger.info(
     f"ПОЕХАЛИ {DEFAULT_LESSON_DELAY_HOURS=} {DEFAULT_LESSON_INTERVAL=} время старта {time.strftime('%d/%m/%Y %H:%M:%S')}")
 
-
+managers = {}
 
 #18-03 17-10 Perplexity
 @handle_telegram_errors
@@ -146,7 +159,7 @@ async def start(update: Update, context: CallbackContext) -> int:
                 logger.info(f"Пользователь {user_id} уже зарегистрирован и курс активирован.")
                 greeting = f"Приветствую, {full_name.split()[0]}! 👋"
                 await safe_reply(update, context, greeting)
-                await show_main_menu(update, context)  # Direct user to main menu
+                await menu_manager.show_main_menu(update, context)  # Direct user to main menu
                 return ACTIVE  # User is fully set up
             else:
                 logger.info(f"Пользователь {user_id} зарегистрирован, но курс не активирован.")
@@ -166,10 +179,7 @@ async def start(update: Update, context: CallbackContext) -> int:
         conn.commit()
         logger.info(f"Новый пользователь {user_id} - запрашиваем имя")
         await safe_reply(update, context, "Привет! Пожалуйста, введите ваше имя:")
-        return WAIT_FOR_NAME  # Ask for the name
-
-
-
+        return WAIT_FOR_NAME
 
 
 async def unknown_command(update: Update, context: CallbackContext):
@@ -433,13 +443,14 @@ async def check_last_lesson( update: Update, context: CallbackContext):
                              )
         else:
             await safe_reply(update, context, "В этом курсе еще есть уроки. Продолжайте обучение!")
-        # Returns count, so that we know how many lessons there
-        return count
+
+        return count  # Returns count, so that we know how many lessons there
 
     except Exception as e:
         logger.error(f"check_last_lesson: Error while checking the last lesson: {e}")
         await safe_reply(update, context, "Произошла ошибка при проверке последнего урока.")
         return None
+
 
 async def cancel (update, context):
     await update.message.reply_text("Разговор завершён.")
@@ -459,9 +470,9 @@ async def error_handler(update: Update, context: CallbackContext):
             logger.error(f"Failed to send error message to admin {admin_id}: {e}")
 
 def setup_handlers(application: Application, conv_handler: ConversationHandler, 
-                  menu_manager: MenuManager, reminder_manager: ReminderManager,
-                  shop_manager: ShopManager, course_manager: CourseManager,
-                  gallery_manager: GalleryManager, support_manager: SupportManager) -> None:
+                  menu_manager: menu_manager, reminder_manager: ReminderManager,
+                  shop_manager: support_manager, course_manager: course_manager,
+                  gallery_manager: gallery_manager, support_manager: support_manager) -> None:
     """Sets up all handlers for the application."""
     application.add_handler(conv_handler)
 
@@ -501,12 +512,26 @@ def setup_handlers(application: Application, conv_handler: ConversationHandler,
         course_manager.handle_course_callback, 
         pattern="^(change_tariff|my_courses|hw_history)$"
     ))
+
+    # Add homework approval handlers
+    application.add_handler(CallbackQueryHandler(
+        course_manager.handle_homework_approval,
+        pattern='^hw_(approve|reject)_\d+'
+    ))
+
+    # Add admin comment handler
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.ChatType.PRIVATE & filters.User(ADMIN_IDS),
+        managers['admin'].save_admin_comment
+    ))
     
     # Other callback queries
     application.add_handler(CallbackQueryHandler(button_handler))
 
 
 def main():
+    global managers
+
     try:
         # Initialize database
         db = DatabaseConnection()
@@ -529,22 +554,18 @@ def main():
         
         # Initialize managers
         managers = {
-            'menu': MenuManager(),
+            'menu': menu_manager,
             'reminder': ReminderManager(),
-            'shop': ShopManager(
-                admin_group_id=ADMIN_GROUP_ID,
-                tariffs_file=CONFIG_FILES["TARIFFS"],
-                payment_info_file=CONFIG_FILES["PAYMENT_INFO"]
-            ),
-            'course': CourseManager(),
+            'shop': shop_manager,
+            'course': course_manager,
             'purchase': PurchaseManager(
                 admin_group_id=ADMIN_GROUP_ID,
                 admin_ids=ADMIN_IDS
             ),
             'stats': StatsManager(ADMIN_IDS),
             'token': TokenManager(ADMIN_IDS),
-            'gallery': GalleryManager(),
-            'support': SupportManager(ADMIN_GROUP_ID),
+            'gallery': gallery_manager,
+            'support': support_manager,
             'scheduler': SchedulerManager(),
             'admin': AdminManager(ADMIN_IDS)  # Add AdminManager
         }
@@ -561,7 +582,8 @@ def main():
             managers['menu'],
             managers['course'],
             managers['purchase'],
-            managers['support']
+            managers['support'],
+            course_data
         )
         conv_handler = conversation_manager.create_conversation_handler()
         
@@ -609,14 +631,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # Add homework approval handlers
-    application.add_handler(CallbackQueryHandler(
-        course_manager.handle_homework_approval,
-        pattern='^hw_(approve|reject)_\d+'
-    ))
-    
-    # Add admin comment handler
-    application.add_handler(MessageHandler(
-        filters.TEXT & filters.ChatType.PRIVATE & filters.User(ADMIN_IDS),
-        managers['admin'].save_admin_comment
-    ))

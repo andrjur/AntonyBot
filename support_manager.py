@@ -1,8 +1,10 @@
+#Support_manager.py
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackContext
+from telegram.ext import CallbackContext, ConversationHandler
 from database import DatabaseConnection
 from utils import safe_reply
+from constants import ADMIN_GROUP_ID
 
 logger = logging.getLogger(__name__)
 
@@ -159,4 +161,6 @@ class SupportManager:
         except Exception as e:
             logger.error(f"Error sending support request to admin: {e}")
             await safe_reply(update, context, "Произошла ошибка при отправке запроса. Попробуйте позже.")
+
+support_manager = SupportManager(ADMIN_GROUP_ID)
 
