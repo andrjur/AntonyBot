@@ -1,11 +1,12 @@
 # main.py
+
 import logging
 import os
 import re
 import time
 from datetime import datetime, timedelta
 import mimetypes
-from typing import Callable
+
 
 # Third-party imports
 from telegram import (
@@ -13,6 +14,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup
 )
+
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -24,8 +26,6 @@ from telegram.ext import (
     ConversationHandler,
     PicklePersistence, ContextTypes
 )
-from telegram.constants import ParseMode
-from telegram.error import TelegramError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
@@ -66,26 +66,30 @@ from constants import (
 )
 
 # Manager imports
-from menu_manager import menu_manager
+from menu_manager import menu_manager, MenuManager
 from reminder_manager import ReminderManager
-from shop_manager import shop_manager
-from course_manager import course_manager, Course  # Updated import path
+from shop_manager import shop_manager, ShopManager
+
+from course_manager import CourseManager   #course_manager,
+
+from functools import partial
+
+
 from purchase_manager import PurchaseManager
 from stats_manager import StatsManager
 from token_manager import TokenManager
-from gallery_manager import gallery_manager
-from support_manager import support_manager
+from gallery_manager import gallery_manager, GalleryManager
+from support_manager import support_manager, SupportManager
 from scheduler_manager import SchedulerManager
 from admin_manager import AdminManager
 from conversation_manager import ConversationManager
 from database import load_ad_config, load_course_data, load_delay_messages
 from constants import ADMIN_GROUP_ID, CONFIG_FILES
 
+
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
-
-
 
 # Update persistence initialization
 persistence = PicklePersistence(filepath=PERSISTENCE_FILE)
@@ -159,7 +163,9 @@ async def start(update: Update, context: CallbackContext) -> int:
                 logger.info(f"Пользователь {user_id} уже зарегистрирован и курс активирован.")
                 greeting = f"Приветствую, {full_name.split()[0]}! 👋"
                 await safe_reply(update, context, greeting)
+                logger.info(f"332 из Start вызываю menu ")
                 await menu_manager.show_main_menu(update, context)  # Direct user to main menu
+                logger.info(f"333 после menu ")
                 return ACTIVE  # User is fully set up
             else:
                 logger.info(f"Пользователь {user_id} зарегистрирован, но курс не активирован.")
@@ -207,6 +213,8 @@ async def button_handler(update: Update, context: CallbackContext):
     stats_manager = managers.get('stats')
     token_manager = managers.get('token')
 
+    logger.info(f"45 button_handler  {course_manager=}")
+
     # Define all button handlers with null checks
     handlers = {
         'menu': menu_manager.show_main_menu if menu_manager else None,
@@ -231,6 +239,7 @@ async def button_handler(update: Update, context: CallbackContext):
 
     try:
         if data in handlers and handlers[data]:
+            logger.info(f"46 ща вызовем  {data=} ... и handlers[data]= {handlers[data]}")
             await handlers[data](update, context)
             await query.answer()
             return
@@ -255,24 +264,28 @@ async def button_handler(update: Update, context: CallbackContext):
         await safe_reply(update, context, "An error occurred. Please try again later.")
         await query.answer("Error processing command")
 
+
 async def handle_text_message(update: Update, context: CallbackContext):
     """Handles text messages."""
     user_id = update.effective_user.id
     text = update.message.text.lower()
-    logger.info(f"Handling text message from user {user_id}: {text}")
+    logger.info(f"50 Handling text message from user {user_id}: {text}")
 
     try:
         if context.user_data.get("waiting_for_code"):
-            logger.info("Ignoring message as user is waiting for code.")
+            logger.info("51 Ignoring message as user is waiting for code.")
             return
 
         # Handle specific commands
         if "предварительные" in text or "пм" in text:
-            await course_manager.send_preliminary_material(update, context)
+            await managers['course'].send_preliminary_material(update, context)
             return
 
         if "текущий урок" in text or "ту" in text:
-            await course_manager.get_current_lesson(update, context)
+            logger.info(f"55 main вызов get_current_lesson ")
+            logger.info(f"56 {update=}, {context=} ")
+            await managers['course'].get_current_lesson(update, context)
+
             return
 
         if "галерея дз" in text or "гдз" in text:
@@ -287,11 +300,24 @@ async def handle_text_message(update: Update, context: CallbackContext):
             await support_manager.start_support_request(update, context)
             return
 
-        await safe_reply(update, context, "Я не понимаю эту команду.")
+        # Если это не команда, считаем, что это имя пользователя
+        logger.info(f"отлично это будет имя {text} для {user_id}")
+
+        # Сохраняем имя пользователя в контекст, чтобы использовать его позже
+        context.user_data['full_name'] = text
+
+        await safe_reply(update, context, "Имя введено, жду код")
+
+        # Устанавливаем состояние ожидания кода в user_data
+        context.user_data['waiting_for_code'] = True  # <--- ВОТ ЭТО ВАЖНО
+
+        # Возвращаем состояние ожидания кода
+        return WAIT_FOR_CODE
 
     except Exception as e:
         logger.error(f"Error in handle_text_message: {e}")
         await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+        return ConversationHandler.END  # Завершаем диалог при ошибке
 
 
 def parse_delay_from_filename( filename):
@@ -469,95 +495,236 @@ async def error_handler(update: Update, context: CallbackContext):
         except Exception as e:
             logger.error(f"Failed to send error message to admin {admin_id}: {e}")
 
-def setup_handlers(application: Application, conv_handler: ConversationHandler, 
+def old_setup_handlers(application: Application, conv_handler: ConversationHandler,
                   menu_manager: menu_manager, reminder_manager: ReminderManager,
-                  shop_manager: support_manager, course_manager: course_manager,
+                  shop_manager: support_manager, course_manager: CourseManager,
                   gallery_manager: gallery_manager, support_manager: support_manager) -> None:
-    """Sets up all handlers for the application."""
-    application.add_handler(conv_handler)
+    try:
+        # Регистрация всех обработчиков
 
-    # Menu and info commands
+        """Sets up all handlers for the application."""
+        application.add_handler(conv_handler)
+
+
+        # Menu and info commands
+        application.add_handler(CommandHandler("menu", menu_manager.show_main_menu))
+        application.add_handler(CommandHandler("info", menu_manager.info_command))
+        application.add_handler(CommandHandler("admins", menu_manager.admins_command))
+
+        # Reminder commands
+        application.add_handler(CommandHandler("reminders", reminder_manager.show_reminders))
+        application.add_handler(CommandHandler("set_morning", lambda update, context:
+            reminder_manager.set_reminder(update, context, "morning")))
+        application.add_handler(CommandHandler("set_evening", lambda update, context:
+            reminder_manager.set_reminder(update, context, "evening")))
+        application.add_handler(CommandHandler("disable_reminders", reminder_manager.disable_reminders))
+
+        # Course commands
+        application.add_handler(CommandHandler("course", course_manager.course_management))
+        logger.info(" 5 до {managers['course'].get_current_lesson=}")
+        # Для команды /lesson
+        application.add_handler(CommandHandler("lesson", managers['course'].get_current_lesson))
+        logger.info(" 6  после ")
+        application.add_handler(MessageHandler(
+            filters.PHOTO | filters.Document.ALL,
+            course_manager.handle_homework
+        ))
+
+        # Для callback'а "get_current_lesson"
+        application.add_handler(CallbackQueryHandler(managers['course'].get_current_lesson, pattern="^get_current_lesson$"))
+
+
+        # Shop commands
+        application.add_handler(CommandHandler("tariffs", shop_manager.show_tariffs))
+        application.add_handler(CommandHandler("buy", shop_manager.handle_buy_tariff))
+
+        # Gallery commands
+        application.add_handler(CommandHandler("gallery", gallery_manager.show_gallery))
+
+        # Support commands
+        application.add_handler(CommandHandler("support", support_manager.start_support_request))
+
+        # Course-related callbacks
+        application.add_handler(CallbackQueryHandler(
+            course_manager.handle_course_callback,
+            pattern="^(change_tariff|my_courses|hw_history)$"
+        ))
+
+        # Add homework approval handlers
+        application.add_handler(CallbackQueryHandler(
+            course_manager.handle_homework_approval,
+            pattern='^hw_(approve|reject)_\d+'
+        ))
+
+        # Add admin comment handler
+        application.add_handler(MessageHandler(
+            filters.TEXT & filters.ChatType.PRIVATE & filters.User(ADMIN_IDS),
+            managers['admin'].save_admin_comment
+        ))
+
+        # Other callback queries
+        application.add_handler(CallbackQueryHandler(button_handler))
+
+    except Exception as e:
+        logger.error(f"10 Ошибка при регистрации обработчиков: {e}")
+        raise
+
+
+def setup_handlers(
+    application: Application,
+    conv_handler: ConversationHandler,
+    menu_manager: MenuManager,
+    reminder_manager: ReminderManager,
+    shop_manager: ShopManager,
+    course_manager: CourseManager,
+    gallery_manager: GalleryManager,
+    support_manager: SupportManager
+) -> None:
+    """
+    Регистрация всех обработчиков для приложения.
+    """
+    try:
+        # 1. Регистрация ConversationHandler
+        application.add_handler(conv_handler)
+
+        # 2. Команды меню и информации
+        register_menu_commands(application, menu_manager)
+
+        # 3. Команды напоминаний
+        register_reminder_commands(application, reminder_manager)
+
+        # 4. Команды курсов
+        register_course_commands(application, course_manager)
+
+        # 5. Команды магазина
+        register_shop_commands(application, shop_manager)
+
+        # 6. Команды галереи
+        register_gallery_commands(application, gallery_manager)
+
+        # 7. Команды поддержки
+        register_support_commands(application, support_manager)
+
+        # 8. Обработчики callback'ов
+        register_callback_handlers(application, course_manager)
+
+        # 9. Дополнительные обработчики
+        register_additional_handlers(application, managers)
+
+    except Exception as e:
+        logger.error(f"Ошибка при регистрации обработчиков: {e}")
+        raise
+
+
+# Вспомогательные функции для регистрации обработчиков
+def register_menu_commands(application: Application, menu_manager: MenuManager):
+    """Регистрация команд меню."""
     application.add_handler(CommandHandler("menu", menu_manager.show_main_menu))
     application.add_handler(CommandHandler("info", menu_manager.info_command))
     application.add_handler(CommandHandler("admins", menu_manager.admins_command))
-    
-    # Reminder commands
+
+    # Регистрация обработчиков кнопок
+    application.add_handler(CallbackQueryHandler(menu_manager.handle_gallery, pattern="^gallery$"))
+    application.add_handler(CallbackQueryHandler(menu_manager.handle_tariffs, pattern="^tariffs$"))
+    application.add_handler(CallbackQueryHandler(menu_manager.handle_course_settings, pattern="^course_settings$"))
+    application.add_handler(CallbackQueryHandler(menu_manager.handle_statistics, pattern="^statistics$"))
+    application.add_handler(CallbackQueryHandler(menu_manager.handle_support, pattern="^support$"))
+
+
+def register_reminder_commands(application: Application, reminder_manager: ReminderManager):
+    """Регистрация команд напоминаний."""
     application.add_handler(CommandHandler("reminders", reminder_manager.show_reminders))
-    application.add_handler(CommandHandler("set_morning", lambda update, context: 
+    application.add_handler(CommandHandler("set_morning", lambda update, context:
         reminder_manager.set_reminder(update, context, "morning")))
-    application.add_handler(CommandHandler("set_evening", lambda update, context: 
+    application.add_handler(CommandHandler("set_evening", lambda update, context:
         reminder_manager.set_reminder(update, context, "evening")))
     application.add_handler(CommandHandler("disable_reminders", reminder_manager.disable_reminders))
-    
-    # Course commands
+
+
+def register_course_commands(application: Application, course_manager: CourseManager):
+    """Регистрация команд курсов."""
     application.add_handler(CommandHandler("course", course_manager.course_management))
     application.add_handler(CommandHandler("lesson", course_manager.get_current_lesson))
     application.add_handler(MessageHandler(
-        filters.PHOTO | filters.Document.ALL, 
+        filters.PHOTO | filters.Document.ALL,
         course_manager.handle_homework
     ))
-    
-    # Shop commands
+    application.add_handler(CallbackQueryHandler(course_manager.get_current_lesson, pattern="^get_current_lesson$"))
+
+
+def register_shop_commands(application: Application, shop_manager: ShopManager):
+    """Регистрация команд магазина."""
     application.add_handler(CommandHandler("tariffs", shop_manager.show_tariffs))
     application.add_handler(CommandHandler("buy", shop_manager.handle_buy_tariff))
-    
-    # Gallery commands
+
+
+def register_gallery_commands(application: Application, gallery_manager: GalleryManager):
+    """Регистрация команд галереи."""
     application.add_handler(CommandHandler("gallery", gallery_manager.show_gallery))
-    
-    # Support commands
+
+
+def register_support_commands(application: Application, support_manager: SupportManager):
+    """Регистрация команд поддержки."""
     application.add_handler(CommandHandler("support", support_manager.start_support_request))
-    
-    # Course-related callbacks
+
+
+def register_callback_handlers(application: Application, course_manager: CourseManager):
+    """Регистрация callback-обработчиков."""
     application.add_handler(CallbackQueryHandler(
-        course_manager.handle_course_callback, 
+        course_manager.handle_course_callback,
         pattern="^(change_tariff|my_courses|hw_history)$"
     ))
-
-    # Add homework approval handlers
     application.add_handler(CallbackQueryHandler(
         course_manager.handle_homework_approval,
         pattern='^hw_(approve|reject)_\d+'
     ))
 
-    # Add admin comment handler
+
+def register_additional_handlers(application: Application, managers: dict):
+    """Регистрация дополнительных обработчиков."""
     application.add_handler(MessageHandler(
         filters.TEXT & filters.ChatType.PRIVATE & filters.User(ADMIN_IDS),
         managers['admin'].save_admin_comment
     ))
-    
-    # Other callback queries
     application.add_handler(CallbackQueryHandler(button_handler))
-
 
 def main():
     global managers
 
     try:
-        # Initialize database
-        db = DatabaseConnection()
-        create_all_tables()
-
-        # Load configurations
-        courses = load_courses()
-        bonuses = load_bonuses()
-        ad_config = load_ad_config()
-        
-        global bonuses_config
-        bonuses_config = bonuses
-        
-        if TOKEN is None:
-            raise ValueError("Bot token not found. Please set the TOKEN environment variable.")
-
         # Initialize application and scheduler
         application = ApplicationBuilder().token(TOKEN).persistence(persistence).build()
         scheduler = AsyncIOScheduler()
-        
+
+        # Initialize database
+        db = DatabaseConnection()
+        application.bot_data['db'] = db  # Добавляем db в bot_data
+
+        logger.info(f"1 перед create_all_tables() db = {db}.")
+        create_all_tables()
+        logger.info("БД жива")
+
+        # Загрузка конфигураций
+        courses = load_courses()
+        bonuses = load_bonuses()
+        ad_config = load_ad_config()
+
+        global bonuses_config
+        bonuses_config = bonuses
+
+        if TOKEN is None:
+            logger.error("Bot token not found. Please set the TOKEN environment variable.")
+
+
+
+        logger.info(f"3 создали приложение ")
+
         # Initialize managers
         managers = {
             'menu': menu_manager,
             'reminder': ReminderManager(),
             'shop': shop_manager,
-            'course': course_manager,
+            'course': CourseManager(db),
             'purchase': PurchaseManager(
                 admin_group_id=ADMIN_GROUP_ID,
                 admin_ids=ADMIN_IDS
@@ -569,14 +736,16 @@ def main():
             'scheduler': SchedulerManager(),
             'admin': AdminManager(ADMIN_IDS)  # Add AdminManager
         }
-        
+        logger.info(f"4 {managers=} ")
+
+
         # Set up manager dependencies
         application.bot_data['managers'] = managers
         managers['token'].shop_manager = managers['shop']
         managers['shop'].token_manager = managers['token']
         managers['course'].token_manager = managers['token']
         managers['course'].stats_manager = managers['stats']
-        
+
         # Create conversation manager and handler
         conversation_manager = ConversationManager(
             managers['menu'],
@@ -586,27 +755,46 @@ def main():
             course_data
         )
         conv_handler = conversation_manager.create_conversation_handler()
-        
-        # Set up all handlers
-        if __name__ == "__main__":
-            # Move these handlers into setup_handlers function
-            setup_handlers(
-                application, 
-                conv_handler, 
-                managers['menu'], 
-                managers['reminder'], 
-                managers['shop'], 
-                managers['course'],
-                managers['gallery'],
-                managers['support']
-            )
-            main()
-        
+
+        # # Set up remaining handlers
+        # application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+        # application.add_error_handler(error_handler)
+
+        # Set up conversation handler
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler('start', start)],
+            states={
+                WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message)],  # Fix this line
+                WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message)],  # Fix this line
+                # ... other states
+            },
+            fallbacks=[CommandHandler('cancel', unknown_command)]
+        )
+
+
+        application.add_handler(conv_handler)
         # Set up remaining handlers
         application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+        application.add_handler(CallbackQueryHandler(button_handler))
+
+
+        # Set up all handlers
+        setup_handlers(
+            application,
+            conv_handler,
+            managers['menu'],
+            managers['reminder'],
+            managers['shop'],
+            managers['course'],
+            managers['gallery'],
+            managers['support']
+        )
+
         application.add_error_handler(error_handler)
-        
-          # Set up job queue
+
+        logger.info(f"5 внизу мэина ")
+
+        # Set up job queue
         job_queue = application.job_queue
         if job_queue:
             job_queue.run_repeating(
@@ -621,13 +809,16 @@ def main():
         scheduler.start()
         logger.info("Bot started successfully...")
         application.run_polling()
-        
+
     except Exception as e:
         logger.error(f"Critical error in main: {e}")
-        raise
+
     finally:
         db.close()
         logger.info("Bot shutdown complete")
 
+
 if __name__ == "__main__":
     main()
+
+

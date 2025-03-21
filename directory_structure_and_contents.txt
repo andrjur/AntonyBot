@@ -1,0 +1,4879 @@
+Directory Structure:
+├── courses/
+│   ├── autogenic/
+│   │   ├── lesson1.txt
+│   │   ├── lesson10.txt
+│   │   ├── lesson11.txt
+│   │   ├── lesson2.txt
+│   │   ├── lesson3.txt
+│   │   ├── lesson4.txt
+│   │   ├── lesson5.txt
+│   │   ├── lesson6.txt
+│   │   ├── lesson7.txt
+│   │   ├── lesson8.txt
+│   │   └── lesson9.txt
+│   ├── femininity/
+│   │   ├── lesson1.html
+│   │   ├── lesson1.md
+│   │   ├── lesson1.txt
+│   │   ├── lesson10.txt
+│   │   ├── lesson11.txt
+│   │   ├── lesson1_1m.jpg
+│   │   ├── lesson1_1m.txt
+│   │   ├── lesson1_3.txt
+│   │   ├── lesson1_p.txt
+│   │   ├── lesson2.md
+│   │   ├── lesson2.txt
+│   │   ├── lesson2_1.jpeg
+│   │   ├── lesson2_2.png
+│   │   ├── lesson2_3.mp3
+│   │   ├── lesson2_4.mp4
+│   │   ├── lesson2_4.png
+│   │   ├── lesson2_5.png
+│   │   ├── lesson2_p.txt
+│   │   ├── lesson2_p5.png
+│   │   ├── lesson3.txt
+│   │   ├── lesson3_5min.txt
+│   │   ├── lesson3_p.txt
+│   │   ├── lesson3_p2.png
+│   │   ├── lesson3_p2min.png
+│   │   ├── lesson3_p4.png
+│   │   ├── lesson4.txt
+│   │   ├── lesson4_3m.txt
+│   │   ├── lesson4_4.png
+│   │   ├── lesson4_p.png
+│   │   ├── lesson4_p.txt
+│   │   ├── lesson4_pp4.png
+│   │   ├── lesson5.txt
+│   │   ├── lesson5_p.png
+│   │   ├── lesson6.txt
+│   │   ├── lesson6_p.txt
+│   │   ├── lesson6_p1.jpeg
+│   │   ├── lesson7.txt
+│   │   ├── lesson7_p.txt
+│   │   ├── lesson8.txt
+│   │   ├── lesson8_2h.txt
+│   │   ├── lesson8_5min.txt
+│   │   ├── lesson8_p.txt
+│   │   └── lesson9.txt
+│   └── lessons/
+│       ├── lesson1.txt
+│       ├── lesson10.txt
+│       ├── lesson11.txt
+│       ├── lesson2.txt
+│       ├── lesson3.txt
+│       ├── lesson4.txt
+│       ├── lesson5.txt
+│       ├── lesson6.txt
+│       ├── lesson7.txt
+│       ├── lesson8.txt
+│       └── lesson9.txt
+├── tests/
+│   ├── __init__.py
+│   ├── test_utils.py
+│   └── описание.txt
+├── __init__.py
+├── about.md
+├── ad_config.json
+├── admin_manager.py
+├── bonuses.json
+├── bot.log
+├── bot_data.pkl
+├── bot_db.sqlite
+├── constants.py
+├── conversation_manager.py
+├── course_manager.py
+├── courses.json
+├── database.py
+├── delay_messages.txt
+├── directory_structure_and_contents.txt
+├── file_utils.py
+├── gallery_manager.py
+├── lessons.py
+├── main.py
+├── mainбяда с обработчиками.py
+├── menu_manager.py
+├── micro_util.py
+├── oldmain.py
+├── passed.png
+├── payment_info.json
+├── purchase_manager.py
+├── pytest.ini
+├── readme.md
+├── reminder_manager.py
+├── requirements.txt
+├── scheduler_manager.py
+├── shop_manager.py
+├── stats_manager.py
+├── support_manager.py
+├── tariffs.json
+├── token_manager.py
+└── utils.py
+
+
+File Contents:
+
+
+=== File: C:\Mentor\botAntony\admin_manager.py ===
+import logging
+from telegram import Update
+from telegram.ext import CallbackContext
+from database import DatabaseConnection
+from utils import safe_reply
+
+logger = logging.getLogger(__name__)
+
+class AdminManager:
+    def __init__(self, admin_ids):
+        self.admin_ids = admin_ids
+        self.db = DatabaseConnection()
+
+    async def save_admin_comment(self, update: Update, context: CallbackContext):
+        """Saves admin comment and updates homework status."""
+        user_id = update.effective_user.id
+        cursor = self.db.get_cursor()
+
+        # Check if user is admin
+        cursor.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (user_id,))
+        if not cursor.fetchone():
+            logger.info(f"Non-admin attempt to use admin command: {user_id}")
+            await safe_reply(update, "⛔ Admin-only command")
+            return
+
+        try:
+            # Handle both callback queries and direct messages
+            if update.callback_query:
+                hw_id = update.callback_query.data.split("_")[2]
+                status = "rejected"
+                comment = "Homework rejected"
+            else:
+                hw_id = context.user_data.get("awaiting_comment")
+                status = context.user_data.pop("approval_status", None)
+                comment = update.message.text
+
+            if not hw_id or not status:
+                await safe_reply(update, "Missing homework ID or status. Please try again.")
+                return
+
+            # Update homework status and comment
+            cursor.execute(
+                """
+                UPDATE homeworks 
+                SET status = ?, 
+                    feedback = ?, 
+                    approval_time = DATETIME('now'), 
+                    admin_comment = ?
+                WHERE hw_id = ?
+                """,
+                (status, comment, comment, hw_id)
+            )
+
+            # Get homework details for notification
+            cursor.execute(
+                "SELECT user_id, course_id, lesson FROM homeworks WHERE hw_id = ?",
+                (hw_id,)
+            )
+            homework_data = cursor.fetchone()
+            
+            self.db.get_connection().commit()
+
+            if homework_data:
+                student_id, course_id, lesson = homework_data
+                message = f"Your homework for lesson {lesson} was {status}."
+                if comment:
+                    message += f"\nComment: {comment}"
+                await context.bot.send_message(chat_id=student_id, text=message)
+
+            response = f"Homework {status}. Comment saved."
+            if update.callback_query:
+                await update.callback_query.answer(response)
+            else:
+                await safe_reply(update, response)
+
+        except Exception as e:
+            logger.error(f"Error in save_admin_comment: {e}")
+            await safe_reply(update, "Error processing admin command")
+
+
+
+
+
+=== File: C:\Mentor\botAntony\ad_config.json ===
+{
+  "ad_percentage": 0.10
+}
+
+
+=== File: C:\Mentor\botAntony\bonuses.json ===
+{
+  "monthly_bonus": 1,
+  "birthday_bonus": 8,
+  "referral_bonus": 4,
+  "bonus_check_interval": 86400
+}
+
+
+=== File: C:\Mentor\botAntony\constants.py ===
+#constants.py
+import os
+import logging
+from datetime import timedelta
+from dotenv import load_dotenv
+
+class CustomFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        full_time = super().formatTime(record, datefmt)
+        return full_time[-9:]
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler("bot.log", encoding="utf-8"),  # Указываем кодировку utf-8 для файла
+        logging.StreamHandler()  # Для вывода в консоль
+    ],
+)
+
+# Замена стандартного Formatter на пользовательский
+for handler in logging.getLogger().handlers:
+    handler.setFormatter(CustomFormatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+logger = logging.getLogger(__name__)
+
+# Настройка уровня логирования для библиотеки httpx
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+load_dotenv()
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
+
+
+ADMIN_IDS = [int(id_) for id_ in os.getenv("ADMIN_IDS", "").split(",") if id_]
+logger.info(f"Admin IDs: {ADMIN_IDS}")
+# Status Constants
+HOMEWORK_STATUS = {
+    "PENDING": "pending",
+    "APPROVED": "approved",
+    "REJECTED": "rejected"
+}
+
+# Course Settings
+DEFAULT_LESSON_DELAY = 24
+DEFAULT_LESSON_INTERVAL = 24
+DEFAULT_LESSON_DELAY_HOURS = 3
+HARD_CODE_DELAY = 5  # seconds for file sending delays
+
+# File Paths
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+COURSES_DIR = os.path.join(BASE_DIR, "courses")
+PERSISTENCE_FILE = "bot_data.pkl"
+
+CONFIG_FILES = {
+    "TARIFFS": os.path.join(BASE_DIR, "config", "tariffs.json"),
+    "COURSES": os.path.join(BASE_DIR, "config", "courses.json"),
+    "AD_CONFIG": os.path.join(BASE_DIR, "config", "ad_config.json"),
+    "BONUSES": os.path.join(BASE_DIR, "config", "bonuses.json"),
+    "PAYMENT_INFO": os.path.join(BASE_DIR, "config", "payment_info.json"),
+    "DELAY_MESSAGES": os.path.join(BASE_DIR, "config", "delay_messages.txt"),
+}
+
+CONFIG_FILES = {
+    "TARIFFS": "tariffs.json",
+    "COURSES": "courses.json",
+    "AD_CONFIG": "ad_config.json",
+    "BONUSES": "bonuses.json",
+    "PAYMENT_INFO": "payment_info.json",
+    "DELAY_MESSAGES": "delay_messages.txt",
+}
+
+# Database Settings
+DB_FILE = os.path.join(BASE_DIR, "bot_database.db")
+
+# Business Logic
+TOKEN_TO_RUB_RATE = 100
+MAX_TOKENS_PER_DAY = 1000
+DEFAULT_TOKENS = 100
+
+# Message Delays
+MIN_DELAY_BETWEEN_MESSAGES = 1  # seconds
+MAX_DELAY_BETWEEN_MESSAGES = 3600  # 1 hour
+
+# Course Types
+COURSE_TYPES = {
+    "MAIN": "main",
+    "AUXILIARY": "auxiliary",
+    "PREMIUM": "premium"
+}
+
+# Chat Links
+COMMUNITY_CHAT_URL = "https://t.me/+PZM8JZ93eewzZWNi"
+
+# Regular Expressions
+DELAY_PATTERN = r"_(\d+)(hour|min|m|h)(?:\.|$)"
+
+# Define states as constants
+(
+    WAIT_FOR_NAME,
+    WAIT_FOR_CODE,
+    ACTIVE,
+    COURSE_SETTINGS,
+    WAIT_FOR_SUPPORT_TEXT,
+    WAIT_FOR_SELFIE,
+    WAIT_FOR_DESCRIPTION,
+    WAIT_FOR_CHECK,
+    WAIT_FOR_GIFT_USER_ID,
+    WAIT_FOR_PHONE_NUMBER,
+) = range(10)
+
+# Logging Configuration
+LOG_FILE = os.path.join(BASE_DIR, "bot.log")
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+
+# Reminder Settings
+REMINDER_INTERVALS = {
+    "morning": "09:00",
+    "evening": "20:00"
+}
+
+# Job Queue Settings
+JOB_QUEUE_FIRST_RUN = 10.0  # seconds
+JOB_QUEUE_INTERVAL = timedelta(minutes=1)
+
+# File Extensions
+ALLOWED_LESSON_EXTENSIONS = ['.md', '.html', '.txt']
+ALLOWED_HOMEWORK_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx']
+
+# Default Values
+DEFAULT_USER_NAME = 'ЧЕБУРАШКА'
+DEFAULT_MIME_TYPE = 'application/octet-stream'
+
+=== File: C:\Mentor\botAntony\conversation_manager.py ===
+# conversation_manager.py
+import logging
+import sqlite3
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ConversationHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    CallbackContext
+)
+from database import DatabaseConnection
+from utils import safe_reply
+
+logger = logging.getLogger(__name__)
+
+# Conversation States
+(
+    WAIT_FOR_NAME,
+    WAIT_FOR_CODE,
+    ACTIVE,
+    COURSE_SETTINGS,
+    WAIT_FOR_SUPPORT_TEXT,
+    WAIT_FOR_SELFIE,
+    WAIT_FOR_DESCRIPTION,
+    WAIT_FOR_CHECK,
+    WAIT_FOR_GIFT_USER_ID,
+    WAIT_FOR_PHONE_NUMBER,
+) = range(10)
+
+class ConversationManager:
+    def __init__(self, menu_manager, course_manager, purchase_manager, support_manager, course_data):
+        self.menu_manager = menu_manager
+        self.course_manager = course_manager
+        self.purchase_manager = purchase_manager
+        self.support_manager = support_manager
+        self.course_data = course_data
+
+    def create_conversation_handler(self):
+        """Creates and returns the conversation handler with all states and handlers."""
+        return ConversationHandler(
+            entry_points=[CommandHandler("start", self.start)],
+            states={
+                WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_user_info)],
+                WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_code_words)],
+                ACTIVE: [
+                    CommandHandler("lesson", self.course_manager.get_current_lesson),
+                    CommandHandler("menu", self.menu_manager.show_main_menu),
+                    MessageHandler(filters.PHOTO | filters.Document.ALL, self.course_manager.handle_homework),
+                ],
+                WAIT_FOR_SUPPORT_TEXT: [MessageHandler((filters.TEXT & ~filters.COMMAND) | filters.PHOTO, self.support_manager.process_support_request)],
+                WAIT_FOR_SELFIE: [MessageHandler(filters.PHOTO, self.purchase_manager.process_selfie)],
+                WAIT_FOR_DESCRIPTION: [MessageHandler(filters.TEXT, self.purchase_manager.process_description)],
+                WAIT_FOR_CHECK: [MessageHandler(filters.PHOTO, self.purchase_manager.process_check)],
+                WAIT_FOR_GIFT_USER_ID: [MessageHandler(filters.TEXT, self.purchase_manager.process_gift_user_id)],
+                WAIT_FOR_PHONE_NUMBER: [MessageHandler(filters.CONTACT, self.purchase_manager.process_phone_number)],
+            },
+            fallbacks=[CommandHandler("cancel", self.cancel)],
+            name="my_conversation",
+            allow_reentry=True,
+        )
+
+    async def start(self, update: Update, context: CallbackContext):
+        """
+        Обрабатывает команду /start.
+        Инициализирует взаимодействие с пользователем и управляет потоком разговора на основе состояния пользователя.
+        """
+        db = DatabaseConnection()
+        conn = db.get_connection()
+        cursor = db.get_cursor()
+
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id is None:
+            logger.error("Could not get user ID - effective_user is None")
+            return ConversationHandler.END
+
+        logger.info(
+            f"Начало разговора с пользователем {user_id} ================================================================="
+        )
+        logger.info(f"Пользователь {user_id} запустил команду /start")
+
+        # Проверка существования пользователя в базе данных
+        cursor.execute(
+            "SELECT user_id, active_course_id, full_name FROM users WHERE user_id = ?",
+            (user_id,)
+        )
+        user_data = cursor.fetchone()
+
+        # Отправка приветственного сообщения
+        await update.effective_message.reply_text(f"👋 Привет! ID пользователя: {user_id}")
+
+        if not user_data:
+            # Новый пользователь - запрос имени
+            logger.info(f"Новый пользователь {user_id} - запрашиваем имя")
+            context.user_data["waiting_for_name"] = True
+            keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.effective_message.reply_text(
+                "📝 Пожалуйста, введите ваше имя:",
+                reply_markup=reply_markup
+            )
+            return WAIT_FOR_NAME
+
+        # Существующий пользователь - проверка статуса курса
+        active_course = user_data[1]
+        full_name = user_data[2]
+
+        if not active_course:
+            # Нет активного курса - запрос кода активации
+            logger.info(f"Пользователю {user_id} требуется активация курса")
+            context.user_data["waiting_for_code"] = True
+            keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.effective_message.reply_text(
+                f"📝 {full_name}, пожалуйста, введите кодовое слово для активации курса:",
+                reply_markup=reply_markup
+            )
+            return WAIT_FOR_CODE
+
+        # У пользователя есть активный курс - показываем главное меню
+        logger.info(f"У пользователя {user_id} есть активный курс, показываем главное меню")
+        await self.menu_manager.show_main_menu(update, context)
+        return ACTIVE
+
+    async def handle_user_info(self, update: Update, context: CallbackContext):
+        db = DatabaseConnection()
+        conn = db.get_connection()
+        cursor = db.get_cursor()
+
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id is None:
+            logger.error("Could not get user ID - effective_user is None")
+            return
+
+        full_name = update.effective_message.text.strip() if update.effective_message and update.effective_message.text else ""
+        logger.info(f" handle_user_info {user_id} ============================================")
+
+        if not full_name:
+            await update.effective_message.reply_text("Имя не может быть пустым. Введите ваше полное имя:")
+            return WAIT_FOR_NAME
+
+        try:
+            if cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO users (user_id, full_name) 
+                    VALUES (?, ?)
+                    ON CONFLICT(user_id) DO 
+                    UPDATE SET full_name = excluded.full_name
+                    """,
+                    (user_id, full_name),
+                )
+            if conn:
+                conn.commit()
+
+            cursor.execute("SELECT user_id, full_name FROM users WHERE user_id = ?", (user_id,))
+            user_data = cursor.fetchone()
+
+            if user_data:
+                saved_name = user_data[1]  # Используем индекс 1 для получения full_name
+            else:
+                saved_name = None
+
+            if saved_name != full_name:
+                logger.error(f"Имя не совпадает с сохраненным {saved_name} != {full_name}")
+                print(f"Имя не совпадает с сохраненным {saved_name} != {full_name}")
+
+            await update.effective_message.reply_text(
+                f"Отлично, {full_name}! Теперь введите кодовое слово для активации курса.")
+            return WAIT_FOR_CODE
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка SQLite: {e}")
+            await update.effective_message.reply_text("Произошла ошибка при работе с базой данных. Попробуйте позже.")
+            return WAIT_FOR_NAME
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении имени: {e}")
+            logger.error(f"Ошибка SQL при сохранении пользователя {user_id}: {e}")
+            await update.effective_message.reply_text("Произошла ошибка при сохранении данных. Попробуйте снова.")
+            return WAIT_FOR_NAME
+
+    async def handle_code_words(self, update: Update, context: CallbackContext):
+        user_id = update.effective_user.id
+        if user_id is None:
+            logger.error("Could not get user ID - effective_user is None")
+            return ConversationHandler.END
+
+        user_code = update.message.text.strip() if update.message and update.message.text else ""
+        logger.info(f"handle_code_words {user_id} {user_code}")
+
+        if user_code in self.course_data:
+            try:
+                success = await self.course_manager.activate_course(update, context, user_id, user_code)
+                if success:
+                    await safe_reply(update, context, "Курс активирован! Получите свой первый урок.")
+                    await self.course_manager.get_current_lesson(update, context)
+                    return ACTIVE
+            except Exception as e:
+                logger.error(f"Error in handle_code_words: {e}")
+                await safe_reply(update, context, "Ошибка при активации курса. Пожалуйста, попробуйте позже.")
+                return WAIT_FOR_CODE
+        else:
+            await safe_reply(update, context, "Неверное кодовое слово. Пожалуйста, попробуйте снова.")
+            return WAIT_FOR_CODE
+
+    async def cancel(self, update: Update, context: CallbackContext):
+        """Handles cancellation of the conversation."""
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id is None:
+            logger.error("Could not get user ID - effective_user is None")
+            return ConversationHandler.END
+
+        logger.info(f"User {user_id} canceled the conversation.")
+        await update.message.reply_text("Диалог отменен. До свидания!")
+        return ConversationHandler.END
+
+
+=== File: C:\Mentor\botAntony\courses.json ===
+[
+  {
+    "course_id": "femininity_self_check",
+    "course_name": "Женственность",
+    "course_type": "main",
+    "code_word": "роза",
+    "price_rub": 1500
+  },
+  {
+    "course_id": "femininity_admin_check",
+    "course_name": "Женственность",
+    "course_type": "main",
+    "code_word": "фиалка",
+    "price_rub": 3000
+  },
+  {
+    "course_id": "femininity_premium",
+    "course_name": "Женственность",
+    "course_type": "main",
+    "code_word": "лепесток",
+    "price_rub": 5000
+  },
+  {
+    "course_id": "autogenic_self_check",
+    "course_name": "Autogenic Self Check",
+    "course_type": "auxiliary",
+    "code_word": "тыква",
+    "price_rub": 1000
+  },
+  {
+    "course_id": "autogenic_admin_check",
+    "course_name": "Autogenic Admin Check",
+    "course_type": "auxiliary",
+    "code_word": "слива",
+    "price_rub": 2000
+  },
+  {
+    "course_id": "autogenic_premium",
+    "course_name": "Autogenic Premium",
+    "course_type": "auxiliary",
+    "code_word": "молоко",
+    "price_rub": 4000
+  },
+  {
+    "course_id": "bonus_course",
+    "course_name": "Exclusive Bonus Course",
+    "course_type": "bonus",
+    "code_word": "бонус",
+    "price_tokens": 100,
+    "price_rub": 7500
+  },
+    {
+    "course_id": "bonus_course_new",
+    "course_name": "Another Exclusive Bonus Course",
+    "course_type": "bonus",
+    "code_word": "бонус2",
+    "price_tokens": 200
+  }
+]
+
+
+=== File: C:\Mentor\botAntony\course_manager.py ===
+#course_manager.py
+import os
+import asyncio
+import random
+import logging
+from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackContext
+from telegram.constants import ParseMode
+
+from constants import (
+    DEFAULT_LESSON_INTERVAL,
+    ADMIN_IDS
+)
+from utils import safe_reply, handle_telegram_errors
+from lessons import get_lesson_text, get_lesson_files
+from database import load_delay_messages, DELAY_MESSAGES_FILE  # Add this import
+
+logger = logging.getLogger(__name__)
+
+# Load delay messages at module level
+DELAY_MESSAGES = load_delay_messages(DELAY_MESSAGES_FILE)
+
+class Course:
+    def __init__(self, course_id, course_name, course_type, code_word, price_rub=None, price_tokens=None):
+        self.course_id = course_id
+        self.course_name = course_name
+        self.course_type = course_type
+        self.code_word = code_word
+        self.tariff = course_id.split('_')[1] if '_' in course_id else 'default'
+        self.price_rub = price_rub
+        self.price_tokens = price_tokens
+
+    def __str__(self):
+        return f"Course(id={self.course_id}, name={self.course_name}, type={self.course_type}, code={self.code_word}, price_rub={self.price_rub}, price_tokens={self.price_tokens})"
+
+class CourseManager:
+    def __init__(self):
+        self.token_manager = None
+        self.stats_manager = None
+
+    @handle_telegram_errors
+    async def handle_homework(self, update: Update, context: CallbackContext):
+        """
+        Обрабатывает отправку домашнего задания (фото/документ) и сохраняет его в БД.
+        """
+        user_id = update.effective_user.id
+        try:
+            # Определяем тип файла
+            file_type = None
+            file_id = None
+
+            if update.message.photo:
+                file_type = "photo"
+                file_id = update.message.photo[-1].file_id
+            elif update.message.document:
+                mime_type = update.message.document.mime_type
+                if mime_type.startswith("image/"):
+                    file_type = "photo"
+                else:
+                    file_type = "document"
+                file_id = update.message.document.file_id
+
+            if not file_type:
+                await safe_reply(update, context, "Формат файла не поддерживается. Отправьте фото или документ.")
+                return
+
+            # Сохраняем в БД
+            cursor = self.db.get_cursor()
+            conn = self.db.get_connection()
+
+            cursor.execute(
+                """
+                INSERT INTO homeworks (user_id, course_id, lesson, file_id, file_type, status)
+                VALUES (?, ?, ?, ?, ?, 'pending')
+                """,
+                (
+                    user_id,
+                    context.user_data.get("active_course_id"),
+                    context.user_data.get("current_lesson"),
+                    file_id,
+                    file_type
+                )
+            )
+            conn.commit()
+
+            # Уведомляем администраторов
+            for admin_id in ADMIN_IDS:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"Пользователь {user_id} отправил домашнее задание к уроку {context.user_data.get('current_lesson')}."
+                )
+
+            await safe_reply(update, context, "Домашнее задание отправлено на проверку!")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отправке домашнего задания: {e}")
+            await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+
+    async def handle_course_callback(self, update: Update, context: CallbackContext):
+        """
+        Обрабатывает callback-запросы, связанные с курсами (например, переход к следующему уроку).
+        """
+        query = update.callback_query
+        if not query:
+            logger.warning("Callback query is None")
+            return
+
+        data = query.data
+        try:
+            if data == "next_lesson":
+                await self._handle_next_lesson(update, context)
+            elif data == "show_homework_status":
+                await self._show_homework_status(update, context)
+            # Добавьте другие callback'ы по аналогии
+            else:
+                await query.answer("Неизвестная команда")
+
+        except Exception as e:
+            logger.error(f"Ошибка в handle_course_callback: {e}")
+            await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+
+    async def course_management(self, update: Update, context: CallbackContext):
+        """
+        Управление курсами (для администраторов):
+        показ статистики, редактирование курсов, начисление бонусов.
+        """
+        user_id = update.effective_user.id
+        if user_id not in ADMIN_IDS:
+            await safe_reply(update, context, "Доступ запрещен.")
+            return
+
+        # Пример команд для управления курсами
+        text = update.message.text.lower()
+        if text.startswith("/stats"):
+            await self.stats_manager.show_stats(update, context)
+        elif text.startswith("/bonus"):
+            await self._admin_add_bonus(update, context)
+        else:
+            await safe_reply(update, context, "Неизвестная команда управления курсами.")
+
+    async def _admin_add_bonus(self, update: Update, context: CallbackContext):
+        # Начисление бонусов
+        args = context.args
+        if len(args) < 2:
+            await safe_reply(update, context, "Используйте: /bonus [user_id] [amount]")
+            return
+
+        target_user_id = int(args[0])
+        amount = int(args[1])
+        await self.token_manager.add_tokens(target_user_id, amount, "admin_bonus", update, context)
+        await safe_reply(update, context, f"Бонус {amount} начислен пользователю {target_user_id}")
+
+    async def get_current_lesson(self, update: Update, context: CallbackContext):
+        """Отправляет все материалы текущего урока."""
+        user_id = update.effective_user.id
+        logger.info(f"get_current_lesson: user_id={user_id}")
+
+        try:
+            # Get active_course_id from users
+            cursor = context.bot_data['db'].cursor()
+            cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
+            active_course_data = cursor.fetchone()
+
+            if not active_course_data or not active_course_data[0]:
+                await safe_reply(update, context, "Активируйте курс через кодовое слово.")
+                return
+
+            active_course_id_full = active_course_data[0]
+            active_course_id = active_course_id_full.split("_")[0]
+            logger.info(f"active_course_id: {active_course_id}")
+
+            # Get progress from user_courses
+            cursor.execute(
+                "SELECT progress FROM user_courses WHERE user_id = ? AND course_id = ?",
+                (user_id, active_course_id_full),
+            )
+            progress_data = cursor.fetchone()
+
+            # If no progress found, start with lesson 1
+            if not progress_data:
+                lesson = 1
+                cursor.execute(
+                    "INSERT INTO user_courses (user_id, course_id, course_type, progress, tariff) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, active_course_id_full, context.user_data.get("course_type", "main"), lesson, context.user_data.get("tariff", "self_check")),
+                )
+                await context.bot_data['db'].commit()
+                await safe_reply(update, context, "Вы начинаете курс с первого урока.")
+            else:
+                lesson = progress_data[0]
+
+            await self.process_lesson(user_id, lesson, active_course_id, context)
+
+            # Calculate next lesson time
+            next_lesson = lesson + 1
+            next_lesson_release_time = datetime.now() + timedelta(hours=DEFAULT_LESSON_INTERVAL)
+            next_lesson_release_str = next_lesson_release_time.strftime("%d-%m-%Y %H:%M:%S")
+            await safe_reply(
+                update, 
+                context,
+                f"Следующий урок {next_lesson} будет доступен {next_lesson_release_str}."
+            )
+
+        except Exception as e:
+            logger.error(f"Ошибка при получении текущего урока: {e}")
+            await safe_reply(update, context, "Ошибка при получении текущего урока. Попробуйте позже.")
+
+    async def process_lesson(self, user_id, lesson_number, active_course_id, context):
+        """Обрабатывает текст урока и отправляет связанные файлы."""
+        try:
+            # Get lesson text
+            lesson_data = get_lesson_text(lesson_number, active_course_id)
+            if lesson_data:
+                lesson_text, parse_mode = lesson_data
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id, 
+                        text=lesson_text, 
+                        parse_mode=parse_mode
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке текста урока: {e}")
+                    await context.bot.send_message(
+                        chat_id=user_id, 
+                        text="Ошибка при отправке текста урока."
+                    )
+            else:
+                await context.bot.send_message(
+                    chat_id=user_id, 
+                    text="Текст урока не найден."
+                )
+
+            # Get and send lesson files
+            lesson_files = get_lesson_files(user_id, lesson_number, active_course_id)
+            tasks = [self.send_file(file_info, user_id, context) for file_info in lesson_files]
+            await asyncio.gather(*tasks)
+
+        except Exception as e:
+            logger.error(f"Ошибка при обработке урока: {e}")
+            await context.bot.send_message(
+                chat_id=user_id, 
+                text="Произошла ошибка при обработке урока."
+            )
+
+    async def send_file(self, file_info, user_id, context):
+        """Отправляет файл с учетом задержки."""
+        file_path = file_info["path"]
+        file_type = file_info["type"]
+        delay = file_info["delay"]
+
+        try:
+            if delay > 0:
+                delay_message = random.choice(DELAY_MESSAGES)
+                logger.info(f"Ожидание {delay} секунд перед отправкой файла {file_path}")
+                await context.bot.send_message(chat_id=user_id, text=delay_message)
+                await asyncio.sleep(delay)
+
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Файл не найден: {file_path}")
+
+            with open(file_path, "rb") as file:
+                if file_type == "photo":
+                    await context.bot.send_photo(chat_id=user_id, photo=file)
+                elif file_type == "video":
+                    await context.bot.send_video(chat_id=user_id, video=file)
+                elif file_type == "audio":
+                    await context.bot.send_audio(chat_id=user_id, audio=file)
+                else:
+                    await context.bot.send_document(chat_id=user_id, document=file)
+
+        except FileNotFoundError:
+            logger.error(f"Файл не найден: {file_path}")
+            await context.bot.send_message(
+                chat_id=user_id, 
+                text=f"Файл не найден: {file_path}"
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при отправке файла {file_path}: {e}")
+            await context.bot.send_message(
+                chat_id=user_id, 
+                text=f"Ошибка при отправке файла: {e}"
+            )
+
+    async def handle_homework_approval(self, update: Update, context: CallbackContext):
+        """
+        Обрабатывает подтверждение/отклонение домашнего задания администратором.
+        Ожидаемый формат callback_data: hw_(approve|reject)_<hw_id>
+        """
+        query = update.callback_query
+        if not query:
+            logger.warning("Callback query is None in handle_homework_approval")
+            return
+
+        try:
+            data = query.data.split("_")
+            action, hw_id = data[1], int(data[2])
+            new_status = "approved" if action == "approve" else "rejected"
+
+            # Получаем данные о домашнем задании
+            db = context.bot_data['db']
+            cursor = db.get_cursor()
+            conn = db.get_connection()
+
+            # Получаем информацию о пользователе и уроке
+            cursor.execute("SELECT user_id, lesson FROM homeworks WHERE hw_id = ?", (hw_id,))
+            result = cursor.fetchone()
+            if not result:
+                await query.answer("Домашнее задание не найдено.")
+                return
+
+            user_id, lesson = result
+
+            # Обновляем статус в БД
+            cursor.execute(
+                """
+                UPDATE homeworks 
+                SET status = ?, approval_time = datetime('now')
+                WHERE hw_id = ?
+                """,
+                (new_status, hw_id)
+            )
+            conn.commit()
+
+            # Уведомляем пользователя
+            user_message = (
+                f"✅ Ваше домашнее задание к уроку {lesson} одобрено!"
+                if new_status == "approved"
+                else f"❌ Ваше домашнее задание к уроку {lesson} отклонено. Попробуйте отправить снова."
+            )
+            await context.bot.send_message(chat_id=user_id, text=user_message)
+
+            # Уведомляем администратора
+            await query.answer(f"Домашнее задание {new_status}!")
+            await query.edit_message_text(f"Статус домашнего задания изменен на: {new_status}")
+
+        except Exception as e:
+            logger.error(f"Error in handle_homework_approval: {e}")
+            await query.answer("Ошибка при обработке запроса. Попробуйте позже.")
+            await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+
+course_manager = CourseManager()
+
+
+=== File: C:\Mentor\botAntony\database.py ===
+# database.py
+import sqlite3
+import logging
+import json  # Import json
+from telegram import Update
+from telegram.ext import CallbackContext
+from constants import CONFIG_FILES
+
+
+# Configuration constants
+DATABASE_FILE = "bot_db.sqlite"
+BONUSES_FILE = CONFIG_FILES["BONUSES"]
+COURSE_DATA_FILE = CONFIG_FILES["COURSES"]
+AD_CONFIG_FILE = CONFIG_FILES["AD_CONFIG"]
+DELAY_MESSAGES_FILE = CONFIG_FILES["DELAY_MESSAGES"]
+
+logger = logging.getLogger(__name__)
+
+# User data cache
+USER_CACHE = {}
+
+class DatabaseConnection:
+    """Singleton class for database connection management"""
+    _instance = None
+
+    def __new__(cls, db_file=DATABASE_FILE):
+        if cls._instance is None:
+            cls._instance = super(DatabaseConnection, cls).__new__(cls)
+            try:
+                cls._instance.conn = sqlite3.connect(db_file)
+                cls._instance.cursor = cls._instance.conn.cursor()
+                logger.info(f"DatabaseConnection: Connected to {db_file}")
+            except sqlite3.Error as e:
+                logger.error(f"DatabaseConnection: Database connection error: {e}")
+                cls._instance.conn = None
+                cls._instance.cursor = None
+        return cls._instance
+
+    def get_connection(self):
+        """Returns the SQLite connection object"""
+        return self.conn
+
+    def get_cursor(self):
+        """Returns the SQLite cursor object"""
+        return self.cursor
+
+    def close(self):
+        """Closes the database connection"""
+        if self.conn:
+            self.conn.close()
+            logger.info("DatabaseConnection: Database connection closed")
+            self.conn = None
+            self.cursor = None
+
+# Database schema management
+def create_all_tables():
+    """Creates all necessary tables if they don't exist"""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+    logger.info("Creating or verifying SQL tables...")
+
+    try:
+        cursor.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                full_name TEXT NOT NULL DEFAULT 'ЧЕБУРАШКА',
+                birthday TEXT,
+                registration_date TEXT,
+                referral_count INTEGER DEFAULT 0,
+                penalty_task TEXT,
+                preliminary_material_index INTEGER DEFAULT 0,
+                tariff TEXT,
+                continuous_flow BOOLEAN DEFAULT 0,
+                next_lesson_time DATETIME,
+                active_course_id TEXT,
+                user_code TEXT,
+                awards TEXT,
+                last_bonus_date TEXT,
+                coins REAL DEFAULT 13.0,
+                trust_credit REAL DEFAULT 1.0,
+                invited_by INTEGER, 
+                support_requests INTEGER DEFAULT 0,
+                morning_time TEXT,   
+                evening_time TEXT,
+                FOREIGN KEY(invited_by) REFERENCES users(user_id)     
+            );
+
+            CREATE TABLE IF NOT EXISTS homeworks (
+                hw_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                course_id TEXT,  
+                lesson INTEGER,
+                file_id TEXT,
+                file_type TEXT,
+                message_id INTEGER,
+                status TEXT DEFAULT 'pending',
+                feedback TEXT,
+                timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
+                lesson_sent_time DATETIME,
+                first_submission_time DATETIME,
+                submission_time DATETIME,
+                approval_time DATETIME,
+                final_approval_time DATETIME,
+                admin_comment TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_tokens (
+                user_id INTEGER PRIMARY KEY,
+                tokens INTEGER DEFAULT 0,
+                last_bonus_date TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                action TEXT, 
+                amount INTEGER,
+                reason TEXT, 
+                timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
+            );
+
+            CREATE TABLE IF NOT EXISTS lootboxes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                box_type TEXT, 
+                reward TEXT, 
+                probability REAL 
+            );
+
+            CREATE TABLE IF NOT EXISTS admins (
+                admin_id INTEGER PRIMARY KEY,
+                level INTEGER DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_codes (
+                code_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER,
+                code TEXT,
+                created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
+                used BOOLEAN DEFAULT FALSE,
+                FOREIGN KEY(admin_id) REFERENCES admins(admin_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id INTEGER PRIMARY KEY,
+                morning_notification TIME,
+                evening_notification TIME,
+                show_example_homework BOOLEAN DEFAULT 1,
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS products (
+                product_id INTEGER PRIMARY KEY,
+                product_name TEXT NOT NULL,
+                price INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS referrals (
+                referrer_id INTEGER, -- ID пользователя, который пригласил
+                referred_user_id INTEGER, -- ID реферрала
+                referral_date TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
+                PRIMARY KEY (referrer_id, referred_user_id),
+                FOREIGN KEY(referrer_id) REFERENCES users(user_id),
+                FOREIGN KEY(referred_user_id) REFERENCES users(user_id)
+            );
+            CREATE TABLE IF NOT EXISTS user_bonuses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                bonus_amount REAL NOT NULL,
+                expiry_date DATETIME NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS user_discounts (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER,
+                amount INTEGER,
+                expiry_date TEXT,
+                used INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS user_courses (
+                user_id INTEGER,
+                course_id TEXT,
+                course_type TEXT CHECK(course_type IN ('main', 'auxiliary')),
+                progress INTEGER DEFAULT 0,
+                purchase_date TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
+                tariff TEXT,
+                PRIMARY KEY (user_id, course_id),
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            );
+            """
+        )
+        if conn:  # Check if connection exists before committing
+            conn.commit()
+        logger.info("Tables successfully created or already existed")
+    except sqlite3.Error as e:
+        logger.error(f"Error creating tables: {e}")
+
+# User data management
+def get_user_data(user_id: int):
+    """Gets user data from database with caching"""
+    if user_id in USER_CACHE:
+        logger.info("Found in cache")
+        return USER_CACHE[user_id]
+    
+    db = DatabaseConnection()
+    cursor = db.get_cursor()
+
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    data = cursor.fetchone()
+    if data:
+        logger.info("Caching user data")
+        USER_CACHE[user_id] = data
+        return data
+    logger.warning("User not found")
+    return None
+
+def clear_user_cache(user_id: int):
+    """Clears cached data for specified user"""
+    logger.info(f"Clearing cache for user {user_id}")
+    if user_id in USER_CACHE:
+        del USER_CACHE[user_id]
+
+# Error handling
+async def handle_error(update: Update, context: CallbackContext, error: Exception):
+    """Handles bot errors"""
+    logger.error(f"Error occurred: {error}")
+
+# Configuration loaders
+def load_payment_info(filename: str) -> dict:
+    """Loads payment data from JSON file"""
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            logger.info(f"Payment data file loaded: {filename}")
+            return data
+    except (FileNotFoundError, json.JSONDecodeError, Exception) as e:
+        logger.error(f"Error loading payment data: {e}")
+        return {}
+
+def load_bonuses() -> dict:
+    """Loads bonus settings with defaults"""
+    default_bonuses = {
+        "monthly_bonus": 1,
+        "birthday_bonus": 5,
+        "referral_bonus": 2,
+        "bonus_check_interval": 86400,  # 24 hours
+    }
+    
+    try:
+        with open(BONUSES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.error(f"Error loading bonuses, using defaults: {e}")
+        return default_bonuses
+
+def load_courses() -> list:
+    """Loads course list"""
+    course_file = CONFIG_FILES["COURSES"]
+    try:
+        with open(course_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.error(f"Error loading courses: {e}")
+        return []
+
+def load_ad_config() -> dict:
+    """Loads advertising configuration"""
+    default_config = {"ad_percentage": 0.3}
+    ad_config_file = CONFIG_FILES["AD_CONFIG"]
+    try:
+        with open(ad_config_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.error(f"Error loading ad config, using defaults: {e}")
+        return default_config
+
+def load_course_data(filename: str) -> dict:
+    """Loads course data from JSON file"""
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, Exception) as e:
+        logger.error(f"Error loading course data: {e}")
+        return {}
+
+def load_delay_messages(file_path: str = DELAY_MESSAGES_FILE) -> list:
+    """Loads delay messages from text file"""
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            messages = [line.strip() for line in file if line.strip()]
+            logger.info(f"Loaded {len(messages)} messages")
+            return messages
+    except (FileNotFoundError, Exception) as e:
+        logger.error(f"Error loading delay messages: {e}")
+        return ["Message not found"]
+
+
+# Загружает тарифы из файла.*
+def load_tariffs():
+    """Загружает тарифы из файла."""
+    logger.info(f"load_tariffs  333333 2")
+    tariffs_file = CONFIG_FILES["TARIFFS"]
+    try:
+        with open(tariffs_file, "r", encoding="utf-8") as f:
+            k = json.load(f)
+            logger.info(f"load_tariffs  k={k} 333333 3")
+            return k
+    except FileNotFoundError:
+        logger.error(f"Файл {tariffs_file} не найден.")
+        return []
+    except json.JSONDecodeError:
+        logger.error(f"Ошибка декодирования JSON в файле {tariffs_file}.")
+        return []
+
+
+=== File: C:\Mentor\botAntony\delay_messages.txt ===
+И следующий материал скоро будет. Начинайте выполнять домашку.
+Подождите, материалы загружаются. Домашнее задание доступно.
+Материалы появятся через несколько секунд. Домашку можно начать уже сейчас.
+💆🏾‍♀️👨🏽‍🦼‍➡️🧑🏻‍🦼‍➡ и скоро ещё материал будет, но домашку делать уже можно
+🤷🏽🤷👨🏽‍🦼‍➡️️🏃🏻‍♀️
+️👨🏽‍🦼‍➡️️🏃🏻‍♀️
+🏾‍♂️💇🏼‍♂️💆🏾‍♀️
+ещё ещё материал идёт, домашнее задание – можно уже делать
+Прошу, пожалуйста, подождите немного, следующий материал будет доступен через несколько (секунд, минут, часов...)
+мы (бот и вселенная) готовим для вас дополнительные материалы, ожидайте
+мы (бот и случайность) готовим для вас дополнительные материалы, ожидайте
+Пожалуйста, подождите, загружаем следующий файл...
+Ещё немного материалов (пара), домашнее задание уже можно делать! А вот принять я его смогу только после того как выдам все материалы.
+Совсем немного осталось до завершения загрузки!
+Подготовка материалов...
+Ожидайте...
+
+
+=== File: C:\Mentor\botAntony\directory_structure_and_contents.txt ===
+Файл слишком большой (16898116 байт). Содержимое не считано.
+
+
+=== File: C:\Mentor\botAntony\file_utils.py ===
+async def send_file(bot, chat_id: int, file_path: str, file_name: str) -> None:
+    # ... existing send_file code ...
+
+def parse_delay_from_filename(filename: str) -> Optional[int]:
+    # ... existing parse_delay code ...
+
+=== File: C:\Mentor\botAntony\gallery_manager.py ===
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackContext
+from database import DatabaseConnection
+from utils import safe_reply
+import random
+
+logger = logging.getLogger(__name__)
+
+class GalleryManager:
+    def __init__(self):
+        self.db = DatabaseConnection()
+
+    async def get_gallery_count(self) -> int:
+        """Counts the number of approved works in the gallery."""
+        cursor = self.db.get_cursor()
+        cursor.execute('SELECT COUNT(*) FROM homeworks WHERE status = "approved"')
+        logger.info("get_gallery_count -------------<")
+        return cursor.fetchone()[0]
+
+    async def show_gallery(self, update: Update, context: CallbackContext):
+        """Shows gallery of homework submissions."""
+        logger.info("show_gallery -------------< и сразу ныряем в get_random_homework")
+        await self.get_random_homework(update, context)
+
+    async def get_random_homework(self, update: Update, context: CallbackContext):
+
+        """Get a random homework."""
+        user_id = update.effective_user.id if update.effective_user else None
+        logger.info(f"get_random_homework -------------< for user_id {user_id}")
+        
+        if user_id is None:
+            logger.error("Could not get user ID - effective_user is None")
+            return
+
+        cursor = self.db.get_cursor()
+        try:
+            # Get the course_id associated with the user
+            cursor.execute(
+                """
+                SELECT uc.course_id
+                FROM user_courses uc
+                WHERE uc.user_id = ?
+                """,
+                (user_id,),
+            )
+            user_course_data = cursor.fetchone()
+            if not user_course_data:
+                logger.warning("Пользователь не имеет активного курса.")
+                await safe_reply(update, context, "У вас нет активного курса. Активируйте курс через кодовое слово.")
+                return
+
+            course_id = user_course_data[0]
+
+            # Get a random homework submission for the course
+            cursor.execute(
+                """
+                SELECT hw_id, file_id, file_type
+                FROM homeworks
+                WHERE course_id = ? AND file_type in ('photo','document')
+                ORDER BY RANDOM()
+                LIMIT 1
+                """,
+                (course_id,),
+            )
+
+            homework = cursor.fetchone()
+            if homework:
+                hw_id, file_id, file_type = homework
+                logger.info(f"file_id={file_id} and hw_id {hw_id}")
+
+                try:
+                    if file_type == "photo":
+                        await context.bot.send_photo(
+                            chat_id=update.effective_chat.id,
+                            photo=file_id,
+                            caption=f"Домашняя работа - hw_id {hw_id}"
+                        )
+                    elif file_type == "document":
+                        await context.bot.send_document(
+                            chat_id=update.effective_chat.id,
+                            document=file_id,
+                            caption=f"Домашняя работа - hw_id {hw_id}"
+                        )
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке файла: {e}")
+                    await safe_reply(update, context, "Произошла ошибка при загрузке работы. Попробуйте позже.")
+            else:
+                await safe_reply(update, context, "К сожалению, работы пока не загружены. Будьте первым!")
+
+        except Exception as e:
+            logger.exception(f"Ошибка при получении случайной работы")
+            await safe_reply(update, context, "Произошла ошибка при загрузке работы. Попробуйте позже.")
+
+gallery_manager=GalleryManager()
+
+
+
+
+=== File: C:\Mentor\botAntony\lessons.py ===
+import os
+import logging
+import re
+from typing import List, Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+def get_lesson_text(lesson_number: int, course_id: str) -> Optional[str]:
+    """Gets lesson text content from various possible file formats."""
+    possible_paths = [
+        f"courses/{course_id}/lesson{lesson_number}.md",
+        f"courses/{course_id}/lesson{lesson_number}.html",
+        f"courses/{course_id}/lesson{lesson_number}.txt"
+    ]
+    
+    for path in possible_paths:
+        try:
+            with open(path, 'r', encoding='utf-8') as file:
+                return file.read()
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            logger.error(f"Error reading lesson file {path}: {e}")
+    
+    return None
+
+def get_lesson_files(user_id: int, lesson_number: int, course_id: str) -> List[Dict]:
+    """Gets lesson files with their delays."""
+    files = []
+    lesson_dir = f"courses/{course_id}/lesson{lesson_number}"
+    delay_pattern = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")
+    
+    try:
+        if not os.path.exists(lesson_dir):
+            return files
+
+        for filename in os.listdir(lesson_dir):
+            file_path = os.path.join(lesson_dir, filename)
+            if not os.path.isfile(file_path):
+                continue
+
+            # Calculate delay from filename
+            delay = 0
+            match = delay_pattern.search(filename)
+            if match:
+                value, unit = match.groups()
+                value = int(value)
+                if unit in ['min', 'm']:
+                    delay = value * 60
+                elif unit in ['hour', 'h']:
+                    delay = value * 3600
+
+            # Determine file type
+            file_type = "document"
+            if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif')):
+                file_type = "photo"
+            elif filename.lower().endswith(('.mp3', '.wav', '.ogg')):
+                file_type = "audio"
+            elif filename.lower().endswith(('.mp4', '.avi', '.mov')):
+                file_type = "video"
+
+            files.append({
+                "path": file_path,
+                "type": file_type,
+                "delay": delay,
+                "name": filename
+            })
+
+        # Sort files by delay
+        return sorted(files, key=lambda x: x['delay'])
+
+    except Exception as e:
+        logger.error(f"Error getting lesson files for lesson {lesson_number}: {e}")
+        return []
+
+=== File: C:\Mentor\botAntony\main.py ===
+# main.py
+import logging
+import os
+import re
+import time
+from datetime import datetime, timedelta
+import mimetypes
+from typing import Callable
+
+# Third-party imports
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    CallbackContext,
+    CallbackQueryHandler,
+    ConversationHandler,
+    PicklePersistence, ContextTypes
+)
+from telegram.constants import ParseMode
+from telegram.error import TelegramError
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from dotenv import load_dotenv
+
+# Local imports
+from database import (
+    DatabaseConnection,
+    create_all_tables,
+    load_courses,
+    load_bonuses,
+    load_ad_config
+)
+from utils import safe_reply, handle_telegram_errors, logger
+from constants import (
+    TOKEN,
+    ADMIN_GROUP_ID,
+    ADMIN_IDS,
+    CONFIG_FILES,
+    DEFAULT_LESSON_INTERVAL,
+    DEFAULT_LESSON_DELAY_HOURS,
+    TOKEN_TO_RUB_RATE,
+    HARD_CODE_DELAY,
+    PERSISTENCE_FILE,
+    DELAY_PATTERN,
+    COMMUNITY_CHAT_URL
+)
+
+from constants import (
+    WAIT_FOR_NAME,
+    WAIT_FOR_CODE,
+    ACTIVE,
+    COURSE_SETTINGS,
+    WAIT_FOR_SUPPORT_TEXT,
+    WAIT_FOR_SELFIE,
+    WAIT_FOR_DESCRIPTION,
+    WAIT_FOR_CHECK,
+    WAIT_FOR_GIFT_USER_ID,
+    WAIT_FOR_PHONE_NUMBER
+)
+
+# Manager imports
+from menu_manager import menu_manager
+from reminder_manager import ReminderManager
+from shop_manager import shop_manager
+from course_manager import course_manager, Course  # Updated import path
+from purchase_manager import PurchaseManager
+from stats_manager import StatsManager
+from token_manager import TokenManager
+from gallery_manager import gallery_manager
+from support_manager import support_manager
+from scheduler_manager import SchedulerManager
+from admin_manager import AdminManager
+from conversation_manager import ConversationManager
+from database import load_ad_config, load_course_data, load_delay_messages
+from constants import ADMIN_GROUP_ID, CONFIG_FILES
+
+load_dotenv()
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
+
+# Update persistence initialization
+persistence = PicklePersistence(filepath=PERSISTENCE_FILE)
+
+# Initialize database and managers
+db = DatabaseConnection()
+
+
+# Load configurations
+bonuses_config = None
+
+ad_config = load_ad_config()
+course_data = load_course_data(CONFIG_FILES["COURSES"])
+delay_messages = load_delay_messages()
+
+logger.info(f"Loaded {len(delay_messages)} delay messages")
+
+# не работает, скотина и всё ломает. Оставлена в назидание
+# async def logging_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """Логирует все входящие сообщения."""
+#     try:
+#         user_id = update.effective_user.id if update.effective_user else None
+#         state = context.user_data['state'] if context.user_data else 'NO_STATE'
+#         logger.info(f"Пользователь {user_id} находится в состоянии {state}")
+#         return True  # Продолжаем обработку
+#     except Exception as e:
+#         logger.error(f"Ошибка в logging_middleware: {e}")
+#         return True  # Важно не блокировать обработку
+
+# персистентность
+persistence = PicklePersistence(filepath="bot_data.pkl")
+
+
+# Регулярное выражение для извлечения времени задержки из имени файла
+# DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)$") расширение сраное забыли
+DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")
+
+logger.info(
+    f"ПОЕХАЛИ {DEFAULT_LESSON_DELAY_HOURS=} {DEFAULT_LESSON_INTERVAL=} время старта {time.strftime('%d/%m/%Y %H:%M:%S')}")
+
+managers = {}
+
+#18-03 17-10 Perplexity
+@handle_telegram_errors
+async def start(update: Update, context: CallbackContext) -> int:
+    """Starts the conversation and asks the user for their name."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id is None:
+        logger.error("Could not get user ID - effective_user is None")
+        return ConversationHandler.END
+
+    logger.info(f"Начало разговора с пользователем {user_id} =================================================================")
+    logger.info(f"Пользователь {user_id} запустил команду /start")
+
+    # Fetch user info from the database
+    user_data=None
+    if cursor:
+        cursor.execute("SELECT full_name, active_course_id FROM users WHERE user_id = ?", (user_id,))
+        user_data = cursor.fetchone()
+
+    if user_data:
+        full_name = user_data[0]
+        active_course_id = user_data[1]
+
+        if full_name:
+            if active_course_id:
+                logger.info(f"Пользователь {user_id} уже зарегистрирован и курс активирован.")
+                greeting = f"Приветствую, {full_name.split()[0]}! 👋"
+                await safe_reply(update, context, greeting)
+                await menu_manager.show_main_menu(update, context)  # Direct user to main menu
+                return ACTIVE  # User is fully set up
+            else:
+                logger.info(f"Пользователь {user_id} зарегистрирован, но курс не активирован.")
+                greeting = f"Приветствую, {full_name.split()[0]}! 👋"
+                await safe_reply(update, context, f"{greeting}\nДля активации курса, введите кодовое слово:")
+                return WAIT_FOR_CODE  # Ask for the code word
+        else:
+            logger.info(f"Пользователь {user_id} зарегистрирован, но имя отсутствует.")
+            await safe_reply(update, context, "Пожалуйста, введите ваше имя:")
+            return WAIT_FOR_NAME  # Ask for the name
+    else:
+        # Insert new user into the database
+        cursor.execute("""
+            INSERT INTO users (user_id, full_name, registration_date) 
+            VALUES (?, ?, ?)
+        """, (user_id, 'ЧЕБУРАШКА', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        logger.info(f"Новый пользователь {user_id} - запрашиваем имя")
+        await safe_reply(update, context, "Привет! Пожалуйста, введите ваше имя:")
+        return WAIT_FOR_NAME
+
+
+async def unknown_command(update: Update, context: CallbackContext):
+    """Обработчик для неизвестных команд."""
+    await update.message.reply_text("Извините, я не знаю такой команды. Пожалуйста, введите /help, чтобы увидеть список доступных команд.")
+
+# Trae 19-03 15:53
+async def button_handler(update: Update, context: CallbackContext):
+    """Handles button presses."""
+    query = update.callback_query
+    if query is None:
+        logger.warning("Query is None - cannot access callback data")
+        return
+        
+    data = query.data
+    managers = context.bot_data.get('managers', {})
+    
+    # Get all required managers
+    shop_manager = managers.get('shop')
+    purchase_manager = managers.get('purchase')
+    menu_manager = managers.get('menu')
+    course_manager = managers.get('course')
+    gallery_manager = managers.get('gallery')
+    support_manager = managers.get('support')
+    stats_manager = managers.get('stats')
+    token_manager = managers.get('token')
+
+    # Define all button handlers with null checks
+    handlers = {
+        'menu': menu_manager.show_main_menu if menu_manager else None,
+        'buy_tariff': purchase_manager.buy_tariff if purchase_manager else None,
+        'gift_tariff': purchase_manager.gift_tariff if purchase_manager else None,
+        'admin_approve_purchase': purchase_manager.admin_approve_purchase if purchase_manager else None,
+        'admin_reject_purchase': purchase_manager.admin_reject_purchase if purchase_manager else None,
+        'admin_approve_discount': purchase_manager.admin_approve_discount if purchase_manager else None,
+        'admin_reject_discount': purchase_manager.admin_reject_discount if purchase_manager else None,
+        'get_current_lesson': course_manager.get_current_lesson if course_manager else None,
+        'gallery': gallery_manager.show_gallery if gallery_manager else None,
+        'gallery_next': gallery_manager.get_random_homework if gallery_manager else None,
+        'menu_back': menu_manager.show_main_menu if menu_manager else None,
+        'support': support_manager.start_support_request if support_manager else None,
+        'tariffs': shop_manager.show_tariffs if shop_manager else None,
+        'course_settings': course_manager.show_course_settings if course_manager else None,
+        'statistics': stats_manager.show_statistics if stats_manager else None,
+        'preliminary_tasks': course_manager.send_preliminary_material if course_manager else None,
+        'buy_lootbox': token_manager.buy_lootbox if token_manager else None,
+        'show_tokens': token_manager.show_token_balance if token_manager else None,
+    }
+
+    try:
+        if data in handlers and handlers[data]:
+            await handlers[data](update, context)
+            await query.answer()
+            return
+
+        # Handle special cases
+        if data.startswith('tariff_'):
+            await shop_manager.handle_tariff_selection(update, context)
+            await query.answer()
+            return
+
+        if data.startswith('set_tariff|'):
+            _, course_id, tariff = data.split('|')
+            await shop_manager.change_tariff(update, context, course_id, tariff)
+            await query.answer()
+            return
+
+        logger.warning(f"No handler found for callback data: {data}")
+        await query.answer("Command not found")
+
+    except Exception as e:
+        logger.error(f"Error in button_handler: {e}")
+        await safe_reply(update, context, "An error occurred. Please try again later.")
+        await query.answer("Error processing command")
+
+
+async def handle_text_message(update: Update, context: CallbackContext):
+    """Handles text messages."""
+    user_id = update.effective_user.id
+    text = update.message.text.lower()
+    logger.info(f"Handling text message from user {user_id}: {text}")
+
+    try:
+        if context.user_data.get("waiting_for_code"):
+            logger.info("Ignoring message as user is waiting for code.")
+            return
+
+        # Handle specific commands
+        if "предварительные" in text or "пм" in text:
+            await course_manager.send_preliminary_material(update, context)
+            return
+
+        if "текущий урок" in text or "ту" in text:
+            await course_manager.get_current_lesson(update, context)
+            return
+
+        if "галерея дз" in text or "гдз" in text:
+            await gallery_manager.show_gallery(update, context)
+            return
+
+        if "тарифы" in text or "ТБ" in text:
+            await shop_manager.show_tariffs(update, context)
+            return
+
+        if "поддержка" in text or "пд" in text:
+            await support_manager.start_support_request(update, context)
+            return
+
+        # Если это не команда, считаем, что это имя пользователя
+        logger.info(f"отлично это будет имя {text} для {user_id}")
+
+        # Сохраняем имя пользователя в контекст, чтобы использовать его позже
+        context.user_data['full_name'] = text
+
+        await safe_reply(update, context, "Имя введено, жду код")
+
+        # Устанавливаем состояние ожидания кода в user_data
+        context.user_data['waiting_for_code'] = True  # <--- ВОТ ЭТО ВАЖНО
+
+        # Возвращаем состояние ожидания кода
+        return WAIT_FOR_CODE
+
+    except Exception as e:
+        logger.error(f"Error in handle_text_message: {e}")
+        await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+        return ConversationHandler.END  # Завершаем диалог при ошибке
+
+
+def parse_delay_from_filename( filename):
+    """
+    Извлекает время задержки из имени файла. TODO повторяет функционал get_lesson_files
+    Возвращает задержку в секундах или None, если задержка не указана.
+    """
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+    match = DELAY_PATTERN.search(filename)
+    if not match:
+        return None
+
+    value, unit = match.groups()
+    value = int(value)
+
+    if unit == "m":  # минуты
+        return value * 60
+    elif unit == "h":  # часы
+        return value * 3600
+    return None
+
+async def send_file(bot, chat_id, file_path, file_name):
+    """
+    Отправляет файл пользователю с улучшенной обработкой ошибок и подробным логированием.
+
+    Args:
+        bot: Объект бота Telegram.
+        chat_id: ID чата, куда нужно отправить файл.
+        file_path: Путь к файлу.
+        file_name: Имя файла (для отправки как документа).
+    """
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+    logger.info(f"Начинаем отправку файла: {file_name} ({file_path}) в чат {chat_id}")
+
+    try:
+        # Проверяем, существует ли файл
+        if not os.path.exists(file_path):
+            logger.error(f"Файл не найден: {file_path}")
+            await bot.send_message(chat_id=chat_id, text="Файл не найден. Пожалуйста, обратитесь в поддержку.")
+            return  # Важно: выходим из функции, если файл не найден
+
+        # Определяем MIME-тип файла
+        mime_type = mimetypes.guess_type(file_path)[0]
+        if not mime_type:
+            logger.warning(
+                f"Не удалось определить MIME-тип для файла: {file_path}. Используем 'application/octet-stream'.")
+            mime_type = 'application/octet-stream'
+
+        logger.info(f"Определен MIME-тип файла: {mime_type}")
+
+        # Открываем файл для чтения в бинарном режиме
+        with open(file_path, "rb") as file:
+            # Отправляем файл в зависимости от MIME-типа
+            if mime_type.startswith('image/'):
+                logger.info(f"Отправляем файл как изображение.")
+                await bot.send_photo(chat_id=chat_id, photo=file)
+            elif mime_type.startswith('video/'):
+                logger.info(f"Отправляем файл как видео.")
+                await bot.send_video(chat_id=chat_id, video=file)
+            elif mime_type.startswith('audio/'):
+                logger.info(f"Отправляем файл как аудио.")
+                await bot.send_audio(chat_id=chat_id, audio=file)
+            else:
+                logger.info(f"Отправляем файл как документ.")
+                await bot.send_document(chat_id=chat_id, document=file, filename=file_name)
+
+        logger.info(f"Файл {file_name} успешно отправлен в чат {chat_id}")
+
+    except Exception as e:
+        # Обрабатываем любые исключения, которые могут возникнуть
+        logger.exception(
+            f"Ошибка при отправке файла {file_name} в чат {chat_id}: {e}")  # Используем logger.exception для трассировки стека
+        await bot.send_message(
+            chat_id=chat_id,
+            text="Произошла ошибка при отправке файла. Пожалуйста, попробуйте позже или обратитесь в поддержку."
+        )
+
+
+async def check_last_lesson( update: Update, context: CallbackContext):
+    """Checks the number of remaining lessons in the course and shows InlineKeyboard."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    user_id = update.effective_user.id
+
+    try:
+        if update.callback_query:
+            query = update.callback_query
+            await query.answer()
+            logger.info("17 check_last_lesson: Callback query received.")
+        else:
+            query = None
+            logger.warning("17 check_last_lesson: This function should be called from a callback query.")
+            await safe_reply(update, context, "17 This function can only be used via button press.")  # added context
+            return None
+
+        # Get active_course_id from users
+        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
+        active_course_data = cursor.fetchone()
+
+        if not active_course_data or not active_course_data[0]:
+            await safe_reply(update, context, "У вас не активирован курс. Пожалуйста, введите кодовое слово.")
+            logger.info("17 check_last_lesson: No active course found for user.")
+            return None
+
+        active_course_id = active_course_data[0].split("_")[0]
+        logger.info(f"17check_last_lesson: active_course_id='{active_course_id}'")
+
+        # Get the number of available lesson files for the course
+        count = 0
+        while True:
+            lesson_paths = [
+                f"courses/{active_course_id}/lesson{count + 1}.md",
+                f"courses/{active_course_id}/lesson{count + 1}.html",
+                f"courses/{active_course_id}/lesson{count + 1}.txt",
+            ]
+            found = any(os.path.exists(path) for path in lesson_paths)
+            if not found:
+                break
+            count += 1
+        logger.warning(f"check_last_lesson: Number of available lessons = {count}")
+
+        # Get the user's current progress
+        cursor.execute(
+            "SELECT progress FROM user_courses WHERE user_id = ? AND course_id LIKE ?",
+            (user_id, f"{active_course_id}%"),
+        )
+        progress_data = cursor.fetchone()
+        current_lesson = progress_data[0] if progress_data else 0
+
+        # If the current lesson is the last one
+        if current_lesson >= count:
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "Перейти в чат болтать", url=COMMUNITY_CHAT_URL
+                    )
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await safe_reply(update, context,
+                             "Поздравляем! Вы прошли все уроки этого курса! Вы можете перейти в чат, чтобы поделиться впечатлениями и пообщаться с другими участниками.",
+                             reply_markup=reply_markup,
+                             )
+        else:
+            await safe_reply(update, context, "В этом курсе еще есть уроки. Продолжайте обучение!")
+
+        return count  # Returns count, so that we know how many lessons there
+
+    except Exception as e:
+        logger.error(f"check_last_lesson: Error while checking the last lesson: {e}")
+        await safe_reply(update, context, "Произошла ошибка при проверке последнего урока.")
+        return None
+
+
+async def cancel (update, context):
+    await update.message.reply_text("Разговор завершён.")
+    return ConversationHandler.END
+
+# Add error handler to catch and log any unhandled exceptions
+async def error_handler(update: Update, context: CallbackContext):
+    """Log Errors caused by Updates."""
+    logger.error(f"Update {update} caused error {context.error}")
+    
+    # Send error message to admin
+    error_message = f"An error occurred:\nUpdate: {update}\nError: {context.error}"
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=error_message)
+        except Exception as e:
+            logger.error(f"Failed to send error message to admin {admin_id}: {e}")
+
+def setup_handlers(application: Application, conv_handler: ConversationHandler, 
+                  menu_manager: menu_manager, reminder_manager: ReminderManager,
+                  shop_manager: support_manager, course_manager: course_manager,
+                  gallery_manager: gallery_manager, support_manager: support_manager) -> None:
+    """Sets up all handlers for the application."""
+    application.add_handler(conv_handler)
+
+    # Menu and info commands
+    application.add_handler(CommandHandler("menu", menu_manager.show_main_menu))
+    application.add_handler(CommandHandler("info", menu_manager.info_command))
+    application.add_handler(CommandHandler("admins", menu_manager.admins_command))
+    
+    # Reminder commands
+    application.add_handler(CommandHandler("reminders", reminder_manager.show_reminders))
+    application.add_handler(CommandHandler("set_morning", lambda update, context: 
+        reminder_manager.set_reminder(update, context, "morning")))
+    application.add_handler(CommandHandler("set_evening", lambda update, context: 
+        reminder_manager.set_reminder(update, context, "evening")))
+    application.add_handler(CommandHandler("disable_reminders", reminder_manager.disable_reminders))
+    
+    # Course commands
+    application.add_handler(CommandHandler("course", course_manager.course_management))
+    application.add_handler(CommandHandler("lesson", course_manager.get_current_lesson))
+    application.add_handler(MessageHandler(
+        filters.PHOTO | filters.Document.ALL, 
+        course_manager.handle_homework
+    ))
+    
+    # Shop commands
+    application.add_handler(CommandHandler("tariffs", shop_manager.show_tariffs))
+    application.add_handler(CommandHandler("buy", shop_manager.handle_buy_tariff))
+    
+    # Gallery commands
+    application.add_handler(CommandHandler("gallery", gallery_manager.show_gallery))
+    
+    # Support commands
+    application.add_handler(CommandHandler("support", support_manager.start_support_request))
+    
+    # Course-related callbacks
+    application.add_handler(CallbackQueryHandler(
+        course_manager.handle_course_callback, 
+        pattern="^(change_tariff|my_courses|hw_history)$"
+    ))
+
+    # Add homework approval handlers
+    application.add_handler(CallbackQueryHandler(
+        course_manager.handle_homework_approval,
+        pattern='^hw_(approve|reject)_\d+'
+    ))
+
+    # Add admin comment handler
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.ChatType.PRIVATE & filters.User(ADMIN_IDS),
+        managers['admin'].save_admin_comment
+    ))
+    
+    # Other callback queries
+    application.add_handler(CallbackQueryHandler(button_handler))
+
+
+
+
+
+def main():
+    global managers
+
+    try:
+        # Initialize database
+        db = DatabaseConnection()
+        logger.info("1 перед create_all_tables()")
+        create_all_tables()
+        logger.info("Database initialized successfully.")
+
+        # Загрузка конфигураций
+        courses = load_courses()
+        bonuses = load_bonuses()
+        ad_config = load_ad_config()
+
+        global bonuses_config
+        bonuses_config = bonuses
+
+        if TOKEN is None:
+            logger.error("Bot token not found. Please set the TOKEN environment variable.")
+
+        # Initialize application and scheduler
+        application = ApplicationBuilder().token(TOKEN).persistence(persistence).build()
+        scheduler = AsyncIOScheduler()
+
+        # Initialize managers
+        managers = {
+            'menu': menu_manager,
+            'reminder': ReminderManager(),
+            'shop': shop_manager,
+            'course': course_manager,
+            'purchase': PurchaseManager(
+                admin_group_id=ADMIN_GROUP_ID,
+                admin_ids=ADMIN_IDS
+            ),
+            'stats': StatsManager(ADMIN_IDS),
+            'token': TokenManager(ADMIN_IDS),
+            'gallery': gallery_manager,
+            'support': support_manager,
+            'scheduler': SchedulerManager(),
+            'admin': AdminManager(ADMIN_IDS)  # Add AdminManager
+        }
+
+        # Set up manager dependencies
+        application.bot_data['managers'] = managers
+        managers['token'].shop_manager = managers['shop']
+        managers['shop'].token_manager = managers['token']
+        managers['course'].token_manager = managers['token']
+        managers['course'].stats_manager = managers['stats']
+
+        # Create conversation manager and handler
+        conversation_manager = ConversationManager(
+            managers['menu'],
+            managers['course'],
+            managers['purchase'],
+            managers['support'],
+            course_data
+        )
+        conv_handler = conversation_manager.create_conversation_handler()
+
+        # # Set up remaining handlers
+        # application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+        # application.add_error_handler(error_handler)
+
+        # Set up conversation handler
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler('start', start)],
+            states={
+                WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message)],  # Fix this line
+                WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message)],  # Fix this line
+                # ... other states
+            },
+            fallbacks=[CommandHandler('cancel', unknown_command)]
+        )
+        application.add_handler(conv_handler)
+        # Set up remaining handlers
+        application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+        application.add_handler(CallbackQueryHandler(button_handler))
+
+        # # Set up all handlers
+        # setup_handlers(
+        #     application,
+        #     conv_handler,
+        #     managers['menu'],
+        #     managers['reminder'],
+        #     managers['shop'],
+        #     managers['course'],
+        #     managers['gallery'],
+        #     managers['support']
+        # )
+        application.add_error_handler(error_handler)
+
+        # Set up job queue
+        job_queue = application.job_queue
+        if job_queue:
+            job_queue.run_repeating(
+                callback=managers['reminder'].send_reminders,
+                interval=timedelta(minutes=1),  # 60 seconds = 1 minute
+                first=10.0  # Start first run after 10 seconds
+            )
+        else:
+            logger.error("Failed to initialize job queue")
+
+        # Start scheduler and bot
+        scheduler.start()
+        logger.info("Bot started successfully...")
+        application.run_polling()
+
+    except Exception as e:
+        logger.error(f"Critical error in main: {e}")
+
+    finally:
+        db.close()
+        logger.info("Bot shutdown complete")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+=== File: C:\Mentor\botAntony\mainбяда с обработчиками.py ===
+Файл слишком большой (247370 байт). Содержимое не считано.
+
+
+=== File: C:\Mentor\botAntony\menu_manager.py ===
+#menu_manager.py
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackContext
+from database import DatabaseConnection
+from utils import safe_reply
+from constants import ADMIN_IDS
+ 
+logger = logging.getLogger(__name__)
+
+class MenuManager:
+    def __init__(self):
+        self.db = DatabaseConnection()
+
+    async def show_main_menu(self, update: Update, context: CallbackContext):
+        """Shows the main menu."""
+        keyboard = [
+            [InlineKeyboardButton("📚 Текущий урок", callback_data="get_current_lesson")],
+            [InlineKeyboardButton("🖼 Галерея работ", callback_data="gallery")],
+            [InlineKeyboardButton("💰 Тарифы", callback_data="tariffs")],
+            [InlineKeyboardButton("⚙️ Настройки курса", callback_data="course_settings")],
+            [InlineKeyboardButton("📊 Статистика", callback_data="statistics")],
+            [InlineKeyboardButton("❓ Поддержка", callback_data="support")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await safe_reply(update, context, "Главное меню:", reply_markup=reply_markup)
+
+    async def info_command(self, update: Update, context: CallbackContext):
+        """Shows bot information."""
+        info_text = (
+            "ℹ️ Информация о боте:\n\n"
+            "Этот бот поможет вам в обучении и управлении курсами.\n"
+            "Используйте /help для просмотра доступных команд."
+        )
+        await safe_reply(update, context, info_text)
+
+    async def admins_command(self, update: Update, context: CallbackContext):
+        """Shows admin contact information."""
+        admin_text = "👨‍💼 Контакты администраторов:\n@admin1\n@admin2"
+        await safe_reply(update, context, admin_text)
+
+    async def reminders(self, update: Update, context: CallbackContext):
+        """Shows reminder settings."""
+        reminder_text = (
+            "⏰ Настройки напоминаний:\n\n"
+            "Используйте следующие команды:\n"
+            "/set_morning - установить утреннее напоминание\n"
+            "/set_evening - установить вечернее напоминание\n"
+            "/disable_reminders - отключить напоминания"
+        )
+        await safe_reply(update, context, reminder_text)
+
+    async def set_morning(self, update: Update, context: CallbackContext):
+        """Sets morning reminder time."""
+        # Implementation for setting morning reminder
+        await safe_reply(update, context, "Утреннее напоминание установлено на 9:00")
+
+    async def set_evening(self, update: Update, context: CallbackContext):
+        """Sets evening reminder time."""
+        # Implementation for setting evening reminder
+        await safe_reply(update, context, "Вечернее напоминание установлено на 20:00")
+
+    async def disable_reminders(self, update: Update, context: CallbackContext):
+        """Disables all reminders."""
+        # Implementation for disabling reminders
+        await safe_reply(update, context, "Все напоминания отключены")
+
+    async def show_course_settings(self, update: Update, context: CallbackContext):
+        """Shows course settings menu."""
+        keyboard = [
+            [InlineKeyboardButton("🔔 Напоминания", callback_data="reminders")],
+            [InlineKeyboardButton("📱 Уведомления", callback_data="notifications")],
+            [InlineKeyboardButton("Назад", callback_data="menu_back")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await safe_reply(update, context, "⚙️ Настройки курса:", reply_markup=reply_markup)
+
+    async def show_statistics(self, update: Update, context: CallbackContext):
+        """Shows user statistics."""
+        user_id = update.effective_user.id
+        cursor = self.db.get_cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total_homeworks,
+                    SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_homeworks,
+                    coins,
+                    trust_credit
+                FROM homeworks h
+                JOIN users u ON h.user_id = u.user_id
+                WHERE h.user_id = ?
+                GROUP BY h.user_id
+            """, (user_id,))
+            
+            stats = cursor.fetchone()
+            if stats:
+                total_hw, approved_hw, coins, trust = stats
+                message = (
+                    "📊 Ваша статистика:\n\n"
+                    f"📚 Всего домашних работ: {total_hw}\n"
+                    f"✅ Одобрено работ: {approved_hw}\n"
+                    f"💰 Монет: {coins}\n"
+                    f"⭐️ Уровень доверия: {trust}"
+                )
+            else:
+                message = "У вас пока нет статистики."
+                
+            await safe_reply(update, context, message)
+            
+        except Exception as e:
+            logger.error(f"Error showing statistics: {e}")
+            await safe_reply(update, context, "Произошла ошибка при загрузке статистики.")
+
+    async def build_admin_homework_keyboard(self, hw_id: int):
+        """Creates keyboard for homework approval."""
+        keyboard = [
+            [InlineKeyboardButton("✅ Просто одобрить", callback_data=f"approve_hw_{hw_id}")],
+            [
+                InlineKeyboardButton(f"✅ +1 🥉", callback_data=f"approve_hw_{hw_id}_reward_1"),
+                InlineKeyboardButton(f"✅ +2 🥉", callback_data=f"approve_hw_{hw_id}_reward_2"),
+                InlineKeyboardButton(f"✅ +3 🥉", callback_data=f"approve_hw_{hw_id}_reward_3")
+            ],
+            [InlineKeyboardButton(f"✅ +10 🥈", callback_data=f"approve_hw_{hw_id}_reward_10")],
+            [InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_hw_{hw_id}")],
+            [InlineKeyboardButton("📝 Добавить комментарий", callback_data=f"feedback_hw_{hw_id}")]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+
+    async def handle_homework_actions(self, update: Update, context: CallbackContext):
+        """Handles admin actions with homework (approval, rejection, rewards)."""
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+
+        if data.startswith("approve_hw_") or data.startswith("reject_hw_"):
+            parts = data.split("_")
+            hw_id = int(parts[2])
+            reward_amount = 0
+
+            if len(parts) > 3 and parts[3] == "reward":
+                reward_amount = int(parts[4])
+
+            if data.startswith("approve_hw_"):
+                await self.approve_homework(update, context, hw_id, reward_amount)
+            elif data.startswith("reject_hw_"):
+                await self.reject_homework(update, context, hw_id)
+        elif data.startswith("feedback_hw_"):
+            hw_id = data.split("_")[2]
+            context.user_data['awaiting_feedback_for'] = hw_id
+            await query.message.reply_text("Введите ваш комментарий к домашнему заданию:")
+            return "WAIT_FOR_HOMEWORK_FEEDBACK"
+        else:
+            await safe_reply(update, context, "Unknown command.")
+
+    async def approve_homework(self, update: Update, context: CallbackContext, hw_id: int, reward_amount: int = 0):
+        """Approves homework with optional reward."""
+        cursor = self.db.get_cursor()
+        conn = self.db.get_connection()
+
+        try:
+            cursor.execute("""
+                SELECT user_id, lesson, course_id 
+                FROM homeworks 
+                WHERE hw_id = ? AND status = 'pending'
+            """, (hw_id,))
+            homework_data = cursor.fetchone()
+
+            if not homework_data:
+                await safe_reply(update, context, "Домашнее задание не найдено или уже проверено.")
+                return
+
+            user_id, lesson, course_id = homework_data
+
+            cursor.execute("""
+                UPDATE homeworks 
+                SET status = 'approved', 
+                    approval_time = strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'),
+                    reward_amount = ?
+                WHERE hw_id = ?
+            """, (reward_amount, hw_id))
+            conn.commit()
+
+            # Notify admin
+            reward_text = f" с наградой {reward_amount} 🥉" if reward_amount > 0 else ""
+            admin_message = f"✅ Домашнее задание пользователя {user_id} (урок {lesson}){reward_text} одобрено."
+            await safe_reply(update, context, admin_message)
+
+            # Notify user
+            user_message = f"Поздравляем! Ваше задание по курсу {course_id} (урок {lesson}) принято администратором."
+            if reward_amount > 0:
+                user_message += f"\nВы получаете {reward_amount} 🥉 за отличную работу!"
+            await context.bot.send_message(chat_id=user_id, text=user_message)
+
+        except Exception as e:
+            logger.error(f"Error in approve_homework: {e}")
+            await safe_reply(update, context, "Произошла ошибка при проверке домашнего задания.")
+
+    async def reject_homework(self, update: Update, context: CallbackContext, hw_id: int):
+        """Rejects homework."""
+        cursor = self.db.get_cursor()
+        conn = self.db.get_connection()
+
+        try:
+            cursor.execute("""
+                UPDATE homeworks 
+                SET status = 'rejected',
+                    rejection_time = strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')
+                WHERE hw_id = ?
+                RETURNING user_id, lesson, course_id
+            """, (hw_id,))
+            result = cursor.fetchone()
+            conn.commit()
+
+            if result:
+                user_id, lesson, course_id = result
+                await safe_reply(update, context, f"Домашнее задание {hw_id} отклонено.")
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"Ваше домашнее задание по курсу {course_id} (урок {lesson}) отклонено. Пожалуйста, проверьте комментарии и отправьте работу повторно."
+                )
+            else:
+                await safe_reply(update, context, "Домашнее задание не найдено.")
+
+        except Exception as e:
+            logger.error(f"Error in reject_homework: {e}")
+            await safe_reply(update, context, "Произошла ошибка при отклонении домашнего задания.")
+
+    async def send_homework_feedback(self, update: Update, context: CallbackContext):
+        """Sends feedback for homework."""
+        hw_id = context.user_data.get('awaiting_feedback_for')
+        if not hw_id:
+            await safe_reply(update, context, "Ошибка: не найдено домашнее задание для отправки комментария.")
+            return
+
+        feedback = update.message.text
+        cursor = self.db.get_cursor()
+
+        try:
+            cursor.execute("SELECT user_id FROM homeworks WHERE hw_id = ?", (hw_id,))
+            result = cursor.fetchone()
+            if result:
+                user_id = result[0]
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"Комментарий преподавателя к вашему домашнему заданию:\n\n{feedback}"
+                )
+                await safe_reply(update, context, "Комментарий отправлен студенту.")
+            else:
+                await safe_reply(update, context, "Домашнее задание не найдено.")
+
+            del context.user_data['awaiting_feedback_for']
+
+        except Exception as e:
+            logger.error(f"Error sending homework feedback: {e}")
+            await safe_reply(update, context, "Произошла ошибка при отправке комментария.")
+
+# Create a single instance to be used throughout the application
+menu_manager = MenuManager()
+
+=== File: C:\Mentor\botAntony\micro_util.py ===
+import os
+import sys
+
+def is_excluded_directory(path, exclude_dirs=None):
+    """
+    Проверяет, является ли путь исключенным каталогом.
+    """
+    if exclude_dirs is None:
+        exclude_dirs = {".git", "__pycache__", ".idea", ".venv"}
+
+    # Разделяем путь на части и проверяем каждую часть
+    parts = path.split(os.sep)
+    for part in parts:
+        if part.startswith(".") or part in exclude_dirs:
+            return True
+    return False
+
+
+def generate_directory_structure(path, prefix="", exclude_dirs=None, max_depth=2, current_depth=0):
+    """
+    Рекурсивно создает псевдографическую структуру каталога.
+    Исключает указанные каталоги и файлы.
+    Ограничивает глубину вложенности.
+    """
+    if exclude_dirs is None:
+        exclude_dirs = {".git", "__pycache__", ".idea", ".venv"}
+
+    result = ""
+    try:
+        # Сортируем элементы: сначала папки, потом файлы
+        entries = sorted(os.listdir(path), key=lambda x: (not os.path.isdir(os.path.join(path, x)), x))
+    except PermissionError:
+        return result  # Пропускаем недоступные директории
+
+    for i, entry in enumerate(entries):
+        full_path = os.path.join(path, entry)
+        is_last = i == len(entries) - 1
+
+        # Пропускаем исключенные каталоги и скрытые файлы/каталоги
+        if is_excluded_directory(full_path, exclude_dirs):
+            continue
+
+        if os.path.isdir(full_path):
+            # Добавляем папку в структуру
+            result += f"{prefix}{'└── ' if is_last else '├── '}{entry}/\n"
+            # Рекурсивно обрабатываем подкаталоги, если глубина позволяет
+            if current_depth < max_depth:
+                result += generate_directory_structure(
+                    full_path,
+                    prefix + ("    " if is_last else "│   "),
+                    exclude_dirs,
+                    max_depth,
+                    current_depth + 1
+                )
+        else:
+            # Добавляем файл в структуру
+            result += f"{prefix}{'└── ' if is_last else '├── '}{entry}\n"
+
+    return result
+
+
+def get_file_contents(path, extensions=(".txt", ".json", ".py"), max_size=40000):
+    """
+    Читает содержимое файлов с указанными расширениями.
+    Выводит прогресс-бар на основе количества считанных файлов.
+    Игнорирует файлы размером больше max_size байт.
+    """
+    result = []
+    total_files = 0
+    processed_files = 0
+
+    # Подсчитываем общее количество подходящих файлов
+    for root, _, files in os.walk(path):
+        if is_excluded_directory(root):
+            continue
+        for file in files:
+            if file.endswith(extensions):
+                total_files += 1
+
+    # Читаем содержимое файлов
+    for root, _, files in os.walk(path):
+        if is_excluded_directory(root):
+            continue
+        for file in files:
+            if file.endswith(extensions):
+                file_path = os.path.join(root, file)
+                processed_files += 1
+                progress = processed_files / total_files * 100
+                print(f"\rСчитано файлов: {processed_files}/{total_files} [{'#' * int(progress // 5):<20}] {progress:.1f}%", end="")
+
+                # Проверяем размер файла
+                file_size = os.path.getsize(file_path)
+                result.append(f"\n\n=== File: {file_path} ===\n")
+                if file_size > max_size:
+                    result.append(f"Файл слишком большой ({file_size} байт). Содержимое не считано.\n")
+                    continue
+
+                # Читаем содержимое файла
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        result.append(f.read())
+                except Exception as e:
+                    result.append(f"Error reading file: {e}\n")
+
+    return "".join(result)
+
+
+def main():
+    # Текущий каталог
+    current_dir = os.getcwd()
+
+    # Генерация структуры каталога
+    print("Создание структуры каталога...")
+    structure = generate_directory_structure(current_dir)
+
+    # Получение содержимого файлов
+    print("\nЧтение содержимого файлов...")
+    file_contents = get_file_contents(current_dir)
+
+    # Запись результата в файл
+    output_file = "directory_structure_and_contents.txt"
+    if os.path.exists(output_file):
+        os.remove(output_file)
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write("Directory Structure:\n")
+        f.write(structure)
+        f.write("\n\nFile Contents:\n")
+        f.write(file_contents)
+
+    print(f"\nСтруктура каталога и содержимое файлов записаны в {output_file}")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+=== File: C:\Mentor\botAntony\oldmain.py ===
+Файл слишком большой (260444 байт). Содержимое не считано.
+
+
+=== File: C:\Mentor\botAntony\payment_info.json ===
+{
+  "phone_number": "+79525515554",
+  "name": "Антон Николаевич Т",
+  "payment_message": "Переведите {amount} на этот номер по СБП на Сбер на имя Антон Николаевич Т"
+}
+
+
+=== File: C:\Mentor\botAntony\purchase_manager.py ===
+#purchase_manager.py
+import logging
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from telegram.ext import CallbackContext, ConversationHandler
+from database import DatabaseConnection
+from utils import safe_reply
+from database import load_tariffs
+
+logger = logging.getLogger(__name__)
+
+class PurchaseManager:
+    def __init__(self, admin_group_id, admin_ids):
+        self.db = DatabaseConnection()
+        self.admin_group_id = admin_group_id
+        self.admin_ids = admin_ids
+
+    async def buy_tariff(self, update: Update, context: CallbackContext):
+        """Handles tariff purchase process."""
+        user_id = update.effective_user.id
+        try:
+            if not context.user_data.get("selected_tariff"):
+                await safe_reply(update, context, "Пожалуйста, сначала выберите тариф.")
+                return
+        
+            tariff = context.user_data["selected_tariff"]
+            cursor = self.db.get_cursor()
+            
+            # Create purchase record
+            cursor.execute("""
+                INSERT INTO purchases (user_id, tariff_id, amount, status)
+                VALUES (?, ?, ?, 'pending')
+                RETURNING id
+            """, (user_id, tariff['id'], tariff['price']))
+            
+            purchase_id = cursor.fetchone()[0]
+            self.db.get_connection().commit()
+        
+            # Send notification to admin
+            admin_message = (
+                f"🛍 Новая покупка!\n"
+                f"Покупатель: {user_id}\n"
+                f"Тариф: {tariff['title']}\n"
+                f"Сумма: {tariff['price']} руб."
+            )
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Подтвердить", callback_data=f"admin_approve_purchase_{purchase_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"admin_reject_purchase_{purchase_id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await context.bot.send_message(
+                chat_id=self.admin_group_id,
+                text=admin_message,
+                reply_markup=reply_markup
+            )
+        
+            await safe_reply(update, context, "Ваша заявка на покупку отправлена администратору. Ожидайте подтверждения.")
+        
+        except Exception as e:
+            logger.error(f"Error in buy_tariff: {e}")
+            await safe_reply(update, context, "Произошла ошибка при оформлении покупки. Попробуйте позже.")
+    
+    async def gift_tariff(self, update: Update, context: CallbackContext):
+        """Handles gifting a tariff to another user."""
+        user_id = update.effective_user.id
+        try:
+            if not context.user_data.get("selected_tariff"):
+                await safe_reply(update, context, "Пожалуйста, сначала выберите тариф для подарка.")
+                return
+    
+            await safe_reply(update, context, "Введите ID пользователя, которому хотите подарить тариф:")
+            context.user_data['gifting'] = True
+            return ConversationHandler.WAIT_FOR_GIFT_USER_ID
+    
+        except Exception as e:
+            logger.error(f"Error in gift_tariff: {e}")
+            await safe_reply(update, context, "Произошла ошибка при оформлении подарка. Попробуйте позже.")
+    
+    async def admin_approve_purchase(self, update: Update, context: CallbackContext):
+        """Handles purchase approval by admin."""
+        try:
+            query = update.callback_query
+            purchase_id = query.data.split('_')[-1]
+            cursor = self.db.get_cursor()
+    
+            # Update purchase status
+            cursor.execute("""
+                UPDATE purchases 
+                SET status = 'approved', approval_time = datetime('now')
+                WHERE id = ? AND status = 'pending'
+                RETURNING user_id, tariff_id
+            """, (purchase_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                await query.answer("Purchase not found or already processed")
+                return
+    
+            user_id, tariff_id = result
+            self.db.get_connection().commit()
+    
+            # Notify user
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="🎉 Ваша покупка подтверждена! Доступ к тарифу активирован."
+            )
+    
+            await query.answer("Purchase approved")
+            await query.edit_message_reply_markup(reply_markup=None)
+    
+        except Exception as e:
+            logger.error(f"Error in admin_approve_purchase: {e}")
+            await query.answer("Error processing approval")
+    
+    async def admin_reject_purchase(self, update: Update, context: CallbackContext):
+        """Handles purchase rejection by admin."""
+        try:
+            query = update.callback_query
+            purchase_id = query.data.split('_')[-1]
+            cursor = self.db.get_cursor()
+    
+            cursor.execute("""
+                UPDATE purchases 
+                SET status = 'rejected', rejection_time = datetime('now')
+                WHERE id = ? AND status = 'pending'
+                RETURNING user_id
+            """, (purchase_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                await query.answer("Purchase not found or already processed")
+                return
+    
+            user_id = result[0]
+            self.db.get_connection().commit()
+    
+            # Notify user
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ Ваша покупка отклонена. Пожалуйста, свяжитесь с поддержкой для уточнения деталей."
+            )
+    
+            await query.answer("Purchase rejected")
+            await query.edit_message_reply_markup(reply_markup=None)
+    
+        except Exception as e:
+            logger.error(f"Error in admin_reject_purchase: {e}")
+            await query.answer("Error processing rejection")
+    
+    async def admin_approve_discount(self, update: Update, context: CallbackContext):
+        """Handles discount approval by admin."""
+        try:
+            query = update.callback_query
+            discount_id = query.data.split('_')[-1]
+            cursor = self.db.get_cursor()
+    
+            cursor.execute("""
+                UPDATE discount_requests 
+                SET status = 'approved', approval_time = datetime('now')
+                WHERE id = ? AND status = 'pending'
+                RETURNING user_id, discount_amount
+            """, (discount_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                await query.answer("Discount request not found or already processed")
+                return
+    
+            user_id, discount_amount = result
+            self.db.get_connection().commit()
+    
+            # Add discount to user's account
+            cursor.execute("""
+                INSERT INTO user_discounts (user_id, amount, expiry_date)
+                VALUES (?, ?, datetime('now', '+30 days'))
+            """, (user_id, discount_amount))
+            self.db.get_connection().commit()
+    
+            # Notify user
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"🎉 Ваша скидка {discount_amount}% одобрена! Она действительна в течение 30 дней."
+            )
+    
+            await query.answer("Discount approved")
+            await query.edit_message_reply_markup(reply_markup=None)
+    
+        except Exception as e:
+            logger.error(f"Error in admin_approve_discount: {e}")
+            await query.answer("Error processing discount approval")
+    
+    async def admin_reject_discount(self, update: Update, context: CallbackContext):
+        """Handles discount rejection by admin."""
+        try:
+            query = update.callback_query
+            discount_id = query.data.split('_')[-1]
+            cursor = self.db.get_cursor()
+    
+            cursor.execute("""
+                UPDATE discount_requests 
+                SET status = 'rejected', rejection_time = datetime('now')
+                WHERE id = ? AND status = 'pending'
+                RETURNING user_id
+            """, (discount_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                await query.answer("Discount request not found or already processed")
+                return
+    
+            user_id = result[0]
+            self.db.get_connection().commit()
+    
+            # Notify user
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ Ваш запрос на скидку отклонен. Вы можете попробовать снова позже."
+            )
+    
+            await query.answer("Discount rejected")
+            await query.edit_message_reply_markup(reply_markup=None)
+    
+        except Exception as e:
+            logger.error(f"Error in admin_reject_discount: {e}")
+            await query.answer("Error processing discount rejection")
+    
+    # Обрабатывает селфи для получения скидки. *
+    async def process_selfie(self, update: Update, context: CallbackContext):
+        """Processes selfie for discount request."""
+        user_id = update.effective_user.id
+        photo = update.message.photo[-1]
+        file_id = photo.file_id
+        context.user_data["selfie_file_id"] = file_id
+
+        await update.message.reply_text("Теперь отправьте описание, почему вы хотите получить эту скидку:")
+        return ConversationHandler.WAIT_FOR_DESCRIPTION
+    
+    # Обрабатывает описание для получения скидки.*
+    async def process_description(self, update: Update, context: CallbackContext):
+        """Processes description for discount request."""
+        user_id = update.effective_user.id
+        tariff = context.user_data.get("tariff")
+        description = update.message.text
+        context.user_data["description"] = description
+        photo = context.user_data.get("selfie_file_id")
+
+        caption = f"Запрос на скидку!\nUser ID: {user_id}\nТариф: {tariff['title']}\nОписание: {description}"
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "✅ Подтвердить скидку",
+                    callback_data=f'admin_approve_discount_{user_id}_{tariff["id"]}',
+                ),
+                InlineKeyboardButton(
+                    "❌ Отклонить скидку",
+                    callback_data=f'admin_reject_discount_{user_id}_{tariff["id"]}',
+                ),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await context.bot.send_photo(
+            chat_id=self.admin_group_id,
+            photo=photo,
+            caption=caption,
+            reply_markup=reply_markup
+        )
+        await update.message.reply_text("Ваш запрос отправлен на рассмотрение администраторам.")
+        return ConversationHandler.END
+
+    async def process_check(self, update: Update, context: CallbackContext):
+        """Processes payment check photo."""
+        try:
+            user_id = update.effective_user.id
+            tariff = context.user_data.get("tariff")
+            photo = update.message.photo[-1]
+            file_id = photo.file_id
+
+            caption = f"Новый запрос на покупку!\nUser ID: {user_id}\nТариф: {tariff['title']}"
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "✅ Подтвердить покупку",
+                        callback_data=f'admin_approve_purchase_{user_id}_{tariff["id"]}',
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Отклонить покупку",
+                        callback_data=f'admin_reject_purchase_{user_id}_{tariff["id"]}',
+                    ),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await context.bot.send_photo(
+                chat_id=self.admin_group_id,
+                photo=file_id,
+                caption=caption,
+                reply_markup=reply_markup,
+            )
+
+            await safe_reply(update, context, "Чек отправлен на проверку администраторам. Ожидайте подтверждения.")
+            context.user_data.clear()
+            return ConversationHandler.END
+        except Exception as e:
+            logger.error(f"process_check error {e}")
+            await safe_reply(update, context, "Ошибка при обработке чека. Попробуйте позже.")
+            return ConversationHandler.END
+
+    async def process_gift_user_id(self, update: Update, context: CallbackContext):
+        """Processes recipient's user ID for gift purchase."""
+        try:
+            gift_user_id = update.message.text
+            if not gift_user_id or not gift_user_id.isdigit():
+                await safe_reply(update, context, "Пожалуйста, введите корректный User ID, состоящий только из цифр.")
+                return ConversationHandler.WAIT_FOR_GIFT_USER_ID
+
+            context.user_data["gift_user_id"] = gift_user_id
+            tariff = context.user_data.get("tariff")
+            text = f"Для оформления подарка, пожалуйста, переведите {tariff['price']} рублей на номер [номер] и загрузите чек сюда в этот диалог."
+            await safe_reply(update, context, text)
+            return ConversationHandler.WAIT_FOR_CHECK
+        except Exception as e:
+            logger.error(f"process_gift_user_id error {e}")
+            await safe_reply(update, context, "Пожалуйста, введите корректный User ID, состоящий только из цифр.")
+            return ConversationHandler.WAIT_FOR_GIFT_USER_ID
+
+    # просим номерок *
+    async def process_phone_number(self, update: Update, context: CallbackContext):
+        """Processes user's phone number for purchase."""
+        contact = update.message.contact
+        phone_number = contact.phone_number
+        context.user_data["phone_number"] = phone_number
+
+        user_id = update.effective_user.id
+        tariff = context.user_data.get("tariff")
+        caption = f"Новый запрос на покупку!\nUser ID: {user_id}\nТариф: {tariff['title']}\nНомер телефона: {phone_number}"
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "✅ Подтвердить покупку",
+                    callback_data=f'admin_approve_purchase_{user_id}_{tariff["id"]}',
+                ),
+                InlineKeyboardButton(
+                    "❌ Отклонить покупку",
+                    callback_data=f'admin_reject_purchase_{user_id}_{tariff["id"]}',
+                ),
+            ]
+        ]
+        photo = context.user_data.get("selfie_file_id")
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if photo:
+            await context.bot.send_photo(
+                chat_id=self.admin_group_id,
+                photo=photo,
+                caption=caption,
+                reply_markup=reply_markup,
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=self.admin_group_id,
+                text=caption,
+                reply_markup=reply_markup
+            )
+
+        await update.message.reply_text("Ваш запрос отправлен на рассмотрение администраторам.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+=== File: C:\Mentor\botAntony\reminder_manager.py ===
+#remainder_manager.py
+import logging
+import re
+from datetime import datetime
+from telegram import Update
+from telegram.ext import CallbackContext, ConversationHandler
+from database import DatabaseConnection
+from utils import safe_reply
+
+logger = logging.getLogger(__name__)
+
+class ReminderManager:
+    def __init__(self):
+        self.db = DatabaseConnection()
+
+    async def show_reminders(self, update: Update, context: CallbackContext):
+        """Shows reminder settings."""
+        user_id = update.effective_user.id
+        cursor = self.db.get_cursor()
+
+        cursor.execute(
+            "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
+            (user_id,)
+        )
+        settings = cursor.fetchone()
+        
+        if not settings:
+            cursor.execute("INSERT INTO user_settings (user_id) VALUES (?)", (user_id,))
+            self.db.get_connection().commit()
+            settings = (None, None)
+
+        morning, evening = settings
+        text = "⏰ Настройка напоминаний:\n"
+        text += f"🌅 Утреннее напоминание: {morning or 'не установлено'}\n"
+        text += f"🌇 Вечернее напоминание: {evening or 'не установлено'}\n\n"
+        text += "Чтобы установить или изменить время, используйте команды:\n"
+        text += "/set_morning HH:MM — установить утреннее напоминание\n"
+        text += "/set_evening HH:MM — установить вечернее напоминание\n"
+        text += "/disable_reminders — отключить все напоминания"
+
+        await safe_reply(update, context, text)
+
+    async def set_reminder(self, update: Update, context: CallbackContext, reminder_type: str):
+        """Sets morning or evening reminder."""
+        user_id = update.effective_user.id
+        try:
+            time = context.args[0]
+            if not re.match(r"^\d{2}:\d{2}$", time):
+                raise ValueError
+            
+            column = f"{reminder_type}_notification"
+            cursor = self.db.get_cursor()
+            cursor.execute(
+                f"UPDATE user_settings SET {column} = ? WHERE user_id = ?",
+                (time, user_id)
+            )
+            self.db.get_connection().commit()
+
+            emoji = "🌅" if reminder_type == "morning" else "🌇"
+            message = f"{emoji} {reminder_type.capitalize()} напоминание установлено на {time}."
+            await safe_reply(update, context, message)
+
+        except (IndexError, ValueError):
+            message = "Неверный формат времени. Используйте формат HH:MM."
+            await safe_reply(update, context, message)
+
+    async def disable_reminders(self, update: Update, context: CallbackContext):
+        """Disables all reminders."""
+        user_id = update.effective_user.id
+        cursor = self.db.get_cursor()
+        
+        cursor.execute(
+            """
+            UPDATE user_settings
+            SET morning_notification = NULL, evening_notification = NULL
+            WHERE user_id = ?
+            """,
+            (user_id,)
+        )
+        self.db.get_connection().commit()
+        await safe_reply(update, context, "Напоминания отключены.")
+
+    async def send_reminders(self, context: CallbackContext):
+        """Sends scheduled reminders to users."""
+        now = datetime.now().strftime("%H:%M")
+        cursor = self.db.get_cursor()
+        
+        cursor.execute("SELECT user_id, morning_notification, evening_notification FROM user_settings")
+        for user_id, morning, evening in cursor.fetchall():
+            if morning and now == morning:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="🌅 Доброе утро! Посмотрите материалы курса."
+                )
+            if evening and now == evening:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="🌇 Добрый вечер! Выполните домашнее задание."
+                )
+
+=== File: C:\Mentor\botAntony\requirements.txt ===
+Error reading file: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+
+
+=== File: C:\Mentor\botAntony\scheduler_manager.py ===
+import logging
+from database import DatabaseConnection
+from telegram.ext import CallbackContext
+from datetime import datetime
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+logger = logging.getLogger(__name__)
+
+class SchedulerManager:
+    def __init__(self):
+        self.db = DatabaseConnection()
+
+    def add_user_to_scheduler(self, user_id: int, time2: datetime, context: CallbackContext, scheduler):
+        """Add user to send_lesson_by_timer with specific time."""
+        try:
+            scheduler.add_job(
+                send_lesson_by_timer,
+                trigger="cron",
+                hour=time2.hour,
+                minute=time2.minute,
+                start_date=datetime.now(),  # Fixed syntax error
+                kwargs={"user_id": user_id, "context": context},
+                id=f"lesson_{user_id}",
+                )
+        except Exception as e:
+            logging.error(f"send_lesson_by_timer failed. {e}------------<<")
+
+        # Move add_user_to_scheduler function here
+
+=== File: C:\Mentor\botAntony\shop_manager.py ===
+# shop_manager.py
+import logging
+import sqlite3
+import json
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackContext
+from database import DatabaseConnection
+from utils import safe_reply
+from constants import ADMIN_GROUP_ID, CONFIG_FILES
+from database import load_bonuses, load_payment_info
+
+
+
+logger = logging.getLogger(__name__)
+
+class ShopManager:
+    def __init__(self, admin_group_id, tariffs_file, payment_info_file):
+        self.admin_group_id = admin_group_id
+        self.tariffs_file = tariffs_file
+        self.payment_info_file = payment_info_file
+        self.db = DatabaseConnection()
+        self.token_manager = None  # Add this line
+        self.init_lootboxes()  # Add this line
+    
+    def init_lootboxes(self):
+        """Initialize lootboxes in the database."""
+        db = DatabaseConnection()
+        conn = db.get_connection()
+        cursor = db.get_cursor()
+        try:
+            cursor.execute("SELECT COUNT(*) FROM lootboxes")
+            count = cursor.fetchone()[0]
+            if count == 0:
+                cursor.execute(
+                    """
+                    INSERT INTO lootboxes (box_type, reward, probability) VALUES
+                    ('light', 'скидка', 0.8),
+                    ('light', 'товар', 0.2);
+                    """
+                )
+                conn.commit()
+                logger.info("Таблица lootboxes инициализирована.")
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка при инициализации таблицы lootboxes: {e}")
+        self.db = DatabaseConnection()
+        self.admin_group_id = ADMIN_GROUP_ID
+        self.tariffs_file = tariffs_file
+        self.payment_info_file = payment_info_file
+        self.bonuses = load_bonuses()  # Add this line
+
+    async def apply_bonuses(self, user_id: int, price: float) -> float:
+        """Applies available bonuses to the price."""
+        try:
+            cursor = self.db.get_cursor()
+            cursor.execute("""
+                SELECT bonus_amount 
+                FROM user_bonuses 
+                WHERE user_id = ? AND expiry_date > datetime('now')
+                """, (user_id,))
+            available_bonus = cursor.fetchone()
+
+            if available_bonus and available_bonus[0] > 0:
+                bonus_amount = min(available_bonus[0], price * 0.2)  # Max 20% discount
+                return price - bonus_amount
+            return price
+
+        except Exception as e:
+            logger.error(f"Error applying bonuses: {e}")
+            return price
+
+    # Отображает тарифы и акции. *
+    async def show_tariffs(self, update: Update, context: CallbackContext):
+        """Shows available tariffs."""
+        try:
+            with open(self.tariffs_file, "r", encoding="utf-8") as f:
+                tariffs = json.load(f)
+
+            message = "Доступные тарифы:\n\n"
+            keyboard = []
+
+            for tariff in tariffs:
+                message += f"📌 {tariff['title']}\n{tariff['description']}\n\n"
+                keyboard.append([InlineKeyboardButton(tariff['title'], callback_data=f"tariff_{tariff['id']}")])
+
+            keyboard.append([InlineKeyboardButton("Назад в меню ↩️", callback_data="menu_back")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await safe_reply(update, context, message, reply_markup=reply_markup)
+
+        except Exception as e:
+            logger.error(f"Error showing tariffs: {e}")
+            await safe_reply(update, context, "Произошла ошибка при загрузке тарифов. Попробуйте позже.")
+
+    # выбор товара в магазине *
+    async def handle_tariff_selection(self, update: Update, context: CallbackContext, tariff_id: str):
+        """Handles the selection of a tariff."""
+        try:
+            with open(self.tariffs_file, "r", encoding="utf-8") as f:
+                tariffs = json.load(f)
+
+            selected_tariff = next((tariff for tariff in tariffs if tariff["id"] == tariff_id), None)
+            if not selected_tariff:
+                await safe_reply(update, context, "Выбранный тариф не найден.")
+                return
+
+            message = f"Вы выбрали: {selected_tariff['title']}\n\n{selected_tariff['description']}"
+            if selected_tariff["type"] == "discount":
+                message += f"\n\nСкидка: {int((1 - selected_tariff['price']) * 100)}%"
+            elif selected_tariff["type"] == "payment":
+                message += f"\n\nЦена: {selected_tariff['price']} руб."
+
+            keyboard = [
+                [InlineKeyboardButton("Купить", callback_data=f"buy_tariff_{tariff_id}")],
+                [InlineKeyboardButton("Назад к тарифам", callback_data="tariffs")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await safe_reply(update, context, message, reply_markup=reply_markup)
+
+        except Exception as e:
+            logger.error(f"Error handling tariff selection: {e}")
+            await safe_reply(update, context, "Произошла ошибка при выборе тарифа. Попробуйте позже.")
+
+    async def handle_admin_action(self, update: Update, context: CallbackContext, data: str):
+        """Handles admin-related shop actions."""
+        if data.startswith("approve_payment_"):
+            payment_id = data.split("_")[-1]
+            await self.handle_approve_payment(update, context, payment_id)
+        elif data.startswith("decline_payment_"):
+            payment_id = data.split("_")[-1]
+            await self.handle_decline_payment(update, context, payment_id)
+
+    async def handle_shop_action(self, update: Update, context: CallbackContext, data: str):
+        """Handles shop-related actions."""
+        if data.startswith('tariff_'):
+            tariff_id = data.split('_', 1)[1]
+            await self.handle_tariff_selection(update, context, tariff_id)
+        elif data.startswith('buy_tariff_'):
+            tariff_id = data.split('_', 2)[2]
+            await self.handle_buy_tariff(update, context, tariff_id)
+        elif data.startswith('go_to_payment_'):
+            tariff_id = data.split('_', 2)[2]
+            await self.handle_go_to_payment(update, context, tariff_id)
+        elif data.startswith('check_payment_'):
+            try:
+                tariff_id = data.split('_', 2)[1]
+                await self.handle_check_payment(update, context, tariff_id)
+            except IndexError:
+                logger.error(f"Failed to extract tariff_id from data: {data}")
+                await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+
+    async def handle_approve_payment(self, update: Update, context: CallbackContext, payment_id: str):
+        """Handles payment approval by admin."""
+        try:
+            cursor = self.db.get_cursor()
+            cursor.execute(
+                """
+                UPDATE transactions 
+                SET status = 'approved', approval_time = datetime('now')
+                WHERE id = ? AND status = 'pending'
+                RETURNING user_id, tariff_id
+                """,
+                (payment_id,)
+            )
+            payment_data = cursor.fetchone()
+            
+            if not payment_data:
+                await safe_reply(update, context, "Payment not found or already processed.")
+                return
+                
+            user_id, tariff_id = payment_data
+            self.db.get_connection().commit()
+            
+            # Add the purchased course to user's profile
+            await self.add_purchased_course(user_id, tariff_id, context)
+            
+            # Notify user about approved payment
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="✅ Ваш платеж подтвержден! Тариф активирован."
+            )
+            
+            logger.info(f"Payment {payment_id} approved for user {user_id}")
+            await safe_reply(update, context, "Payment approved successfully.")
+            
+        except Exception as e:
+            logger.error(f"Error approving payment: {e}")
+            await safe_reply(update, context, "Error processing payment approval.")
+
+    async def handle_decline_payment(self, update: Update, context: CallbackContext, payment_id: str):
+        """Handles payment decline by admin."""
+        try:
+            cursor = self.db.get_cursor()
+            cursor.execute(
+                """
+                UPDATE transactions 
+                SET status = 'declined', decline_time = datetime('now')
+                WHERE id = ? AND status = 'pending'
+                RETURNING user_id, tariff_id
+                """,
+                (payment_id,)
+            )
+            payment_data = cursor.fetchone()
+            
+            if not payment_data:
+                await safe_reply(update, context, "Payment not found or already processed.")
+                return
+                
+            user_id, tariff_id = payment_data
+            self.db.get_connection().commit()
+            
+            # Notify user about declined payment
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ Ваш платеж отклонен. Пожалуйста, проверьте детали оплаты и попробуйте снова."
+            )
+            
+            logger.info(f"Payment {payment_id} declined for user {user_id}")
+            await safe_reply(update, context, "Payment declined successfully.")
+            
+        except Exception as e:
+            logger.error(f"Error declining payment: {e}")
+            await safe_reply(update, context, "Error processing payment decline.")
+
+    # Update handle_buy_tariff to use bonuses
+    async def handle_buy_tariff(self, update: Update, context: CallbackContext, tariff_id: str):
+        """Handles the tariff purchase process."""
+        try:
+            with open(self.tariffs_file, "r", encoding="utf-8") as f:
+                tariffs = json.load(f)
+
+            selected_tariff = next((t for t in tariffs if t["id"] == tariff_id), None)
+            if not selected_tariff:
+                await safe_reply(update, context, "Тариф не найден.")
+                return
+
+            # Apply bonuses to price
+            original_price = selected_tariff['price']
+            final_price = await self.apply_bonuses(update.effective_user.id, original_price)
+            
+            message = (
+                f"💳 Оплата тарифа: {selected_tariff['title']}\n"
+                f"💰 Сумма: {original_price} руб."
+            )
+            
+            if final_price < original_price:
+                message += f"\n🎉 Цена с учетом бонусов: {final_price} руб."
+
+            message += "\n\nДля оплаты нажмите кнопку 'Перейти к оплате'"
+
+            keyboard = [
+                [InlineKeyboardButton("Перейти к оплате", callback_data=f"go_to_payment_{tariff_id}")],
+                [InlineKeyboardButton("Назад", callback_data="tariffs")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await safe_reply(update, context, message, reply_markup=reply_markup)
+
+        except Exception as e:
+            logger.error(f"Error in handle_buy_tariff: {e}")
+            await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+
+    async def handle_go_to_payment(self, update: Update, context: CallbackContext, tariff_id: str):
+        """Handles the payment process initiation."""
+        try:
+            payment_info = load_payment_info(self.payment_info_file)
+            if not payment_info:
+                await safe_reply(update, context, "Ошибка загрузки информации об оплате.")
+                return
+
+            with open(self.tariffs_file, "r", encoding="utf-8") as f:
+                tariffs = json.load(f)
+
+            selected_tariff = next((t for t in tariffs if t["id"] == tariff_id), None)
+            if not selected_tariff:
+                await safe_reply(update, context, "Тариф не найден.")
+                return
+
+            # Create payment record
+            cursor = self.db.get_cursor()
+            cursor.execute(
+                """
+                INSERT INTO transactions (user_id, tariff_id, amount, status, created_at)
+                VALUES (?, ?, ?, 'pending', datetime('now'))
+                """,
+                (update.effective_user.id, tariff_id, selected_tariff['price'])
+            )
+            self.db.get_connection().commit()
+
+            message = (
+                f"🏦 Реквизиты для оплаты:\n"
+                f"Номер карты: {payment_info['card_number']}\n"
+                f"Получатель: {payment_info['recipient_name']}\n"
+                f"Сумма: {selected_tariff['price']} руб.\n\n"
+                "После оплаты нажмите 'Я оплатил'"
+            )
+
+            keyboard = [
+                [InlineKeyboardButton("Я оплатил", callback_data=f"check_payment_{tariff_id}")],
+                [InlineKeyboardButton("Отмена", callback_data="tariffs")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await safe_reply(update, context, message, reply_markup=reply_markup)
+
+        except Exception as e:
+            logger.error(f"Error in handle_go_to_payment: {e}")
+            await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+
+    async def handle_check_payment(self, update: Update, context: CallbackContext, tariff_id: str):
+        """Handles payment verification process."""
+        try:
+            user_id = update.effective_user.id
+            
+            # Get transaction ID
+            cursor = self.db.get_cursor()
+            cursor.execute(
+                """
+                SELECT id FROM transactions 
+                WHERE user_id = ? AND tariff_id = ? AND status = 'pending'
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (user_id, tariff_id)
+            )
+            transaction = cursor.fetchone()
+            if not transaction:
+                await safe_reply(update, context, "Транзакция не найдена.")
+                return
+                
+            transaction_id = transaction[0]
+            
+            # Notify admins about new payment
+            admin_message = (
+                f"💰 Новый платеж!\n"
+                f"От пользователя: {user_id}\n"
+                f"Тариф: {tariff_id}"
+            )
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Подтвердить", callback_data=f"approve_payment_{transaction_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"decline_payment_{transaction_id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await context.bot.send_message(
+                chat_id=self.admin_group_id,
+                text=admin_message,
+                reply_markup=reply_markup
+            )
+            
+            # Notify user
+            await safe_reply(
+                update,
+                context,
+                "✅ Спасибо! Ваш платеж находится на проверке. Мы уведомим вас о результате."
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in handle_check_payment: {e}")
+            await safe_reply(update, context, "Произошла ошибка при проверке платежа. Попробуйте позже.")
+
+    async def add_purchased_course(self, user_id: int, tariff_id: str, context: CallbackContext):
+        """Adds a purchased course to the user's profile."""
+        logger.info(f"add_purchased_course: User {user_id} attempting to add course {tariff_id}")
+        try:
+            cursor = self.db.get_cursor()
+            # Check if the course already exists for the user
+            cursor.execute(
+                """
+                SELECT * FROM user_courses
+                WHERE user_id = ? AND course_id = ?
+                """,
+                (user_id, tariff_id),
+            )
+            existing_course = cursor.fetchone()
+
+            if existing_course:
+                await safe_reply(context.update, context, "Этот курс уже есть в вашем профиле.")
+                logger.info(f"add_purchased_course: Course {tariff_id} already exists for user {user_id}.")
+                return
+
+            # Load tariff data from tariffs.json
+            with open(self.tariffs_file, "r", encoding="utf-8") as f:
+                tariffs = json.load(f)
+            tariff = next((t for t in tariffs if t["id"] == tariff_id), None)
+
+            if not tariff:
+                logger.error(f"add_purchased_course: Tariff with id {tariff_id} not found in tariffs.json")
+                await safe_reply(context.update, context, "Произошла ошибка при добавлении курса. Попробуйте позже.")
+                return
+
+            course_type = tariff.get("course_type", "main")
+            tariff_name = tariff_id.split("_")[1] if len(tariff_id.split("_")) > 1 else "default"
+
+            # Add the course to user_courses
+            cursor.execute(
+                """
+                INSERT INTO user_courses (user_id, course_id, course_type, progress, tariff)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, tariff_id, course_type, 1, tariff_name),
+            )
+
+            # Update active_course_id in users
+            cursor.execute(
+                """
+                UPDATE users
+                SET active_course_id = ?
+                WHERE user_id = ?
+                """,
+                (tariff_id, user_id),
+            )
+            self.db.get_connection().commit()
+
+            logger.info(f"add_purchased_course: Course {tariff_id} added to user {user_id}")
+            await safe_reply(context.update, context, "Новый курс был добавлен вам в профиль.")
+
+        except Exception as e:
+            logger.error(f"add_purchased_course: An error occurred for user {user_id}: {e}")
+            await safe_reply(context.update, context, "Произошла ошибка при добавлении курса. Попробуйте позже.")
+
+    async def process_lootbox_reward(self, user_id: int, reward: str):
+        """Process the reward from a lootbox."""
+        if reward == "скидка":
+            discount_amount = 10  # 10% discount
+            cursor = self.db.get_cursor()
+            cursor.execute(
+                """INSERT INTO user_discounts (user_id, amount, expiry_date)
+                VALUES (?, ?, datetime('now', '+7 days'))""",
+                (user_id, discount_amount)
+            )
+            self.db.get_connection().commit()
+            return f"Скидка {discount_amount}% на 7 дней!"
+        elif reward == "товар":
+            # Add logic for item rewards
+            return "Предмет добавлен в ваш инвентарь!"
+        return "Неизвестная награда"
+
+tariffs_file=CONFIG_FILES["TARIFFS"]
+payment_info_file=CONFIG_FILES["PAYMENT_INFO"]
+shop_manager = ShopManager( ADMIN_GROUP_ID, tariffs_file, payment_info_file)
+
+
+=== File: C:\Mentor\botAntony\stats_manager.py ===
+# stats_manager.py
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackContext
+from database import DatabaseConnection
+from utils import safe_reply
+from constants import HOMEWORK_STATUS
+
+logger = logging.getLogger(__name__)
+
+class StatsManager:
+    def __init__(self, admin_ids):
+        self.db = DatabaseConnection()
+        self.admin_ids = admin_ids
+
+    def get_average_homework_time(self, user_id):
+        """Calculate average time between homework submission and approval."""
+        cursor = self.db.get_cursor()
+        cursor.execute(
+            """
+            SELECT AVG((JULIANDAY(approval_time) - JULIANDAY(submission_time)) * 24 * 60 * 60)
+            FROM homeworks
+            WHERE user_id = ? AND status = 'approved'
+            """,
+            (user_id,),
+        )
+        result = cursor.fetchone()[0]
+
+        logger.info(f"{result} - get_average_homework_time")
+
+        if result:
+            average_time_seconds = int(result)
+            hours, remainder = divmod(average_time_seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            return f"{hours} часов {minutes} минут"
+        else:
+            return "Нет данных"
+
+    async def show_statistics(self, update, context: CallbackContext):
+        """Shows statistics for administrator."""
+        cursor = self.db.get_cursor()
+        admin_id = update.effective_user.id
+
+        # Check if the user is an admin
+        if str(admin_id) not in self.admin_ids:
+            await update.message.reply_text("У вас нет прав для выполнения этой команды.")
+            return
+
+        try:
+            # Get total number of users
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = cursor.fetchone()[0]
+
+            # Get number of active courses
+            cursor.execute("SELECT COUNT(DISTINCT course_id) FROM user_courses")
+            total_courses = cursor.fetchone()[0]
+
+            # Format statistics message
+            stats_message = (
+                f"📊 Статистика:\n\n"
+                f"👥 Пользователей: {total_users}\n"
+                f"📚 Активных курсов: {total_courses}\n"
+            )
+
+            await update.message.reply_text(stats_message)
+
+        except Exception as e:
+            logger.error(f"Error showing statistics: {e}")
+            await update.message.reply_text("Произошла ошибка при получении статистики.")
+
+    async def get_homework_status_text(self, user_id, course_id):
+        """Returns homework check status text."""
+        cursor = self.db.get_cursor()
+
+        cursor.execute(
+            """
+            SELECT hw_id, lesson, status
+            FROM homeworks
+            WHERE user_id = ? AND course_id = ?
+            ORDER BY lesson DESC LIMIT 1
+            """,
+            (user_id, course_id),
+        )
+        homework_data = cursor.fetchone()
+
+        if not homework_data:
+            cursor.execute(
+                """
+                SELECT progress
+                FROM user_courses
+                WHERE user_id = ? AND course_id = ?
+                """,
+                (user_id, course_id),
+            )
+            progress_data = cursor.fetchone()
+            if progress_data:
+                lesson = progress_data[0]
+                return f"Жду домашку к {lesson} уроку"
+            else:
+                return "Информация о прогрессе недоступна"
+
+        hw_id, lesson, status = homework_data
+
+        if status == "pending":
+            return f"Домашка к {lesson} уроку на самопроверке"
+        elif status == "approved":
+            return f"Домашка к {lesson} уроку принята"
+        else:
+            return "Статус домашки неизвестен странен и загадочен"
+
+    async def show_token_statistics(self, update: Update, context: CallbackContext):
+        """Shows token-related statistics for administrators."""
+        if str(update.effective_user.id) not in self.admin_ids:
+            return
+            
+        cursor = self.db.get_cursor()
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_transactions,
+                SUM(CASE WHEN action = 'spend' THEN amount ELSE 0 END) as total_spent,
+                SUM(CASE WHEN action = 'earn' THEN amount ELSE 0 END) as total_earned
+            FROM transactions
+        """)
+        stats = cursor.fetchone()
+        
+        message = (
+            "📊 Token Statistics:\n"
+            f"Total Transactions: {stats[0]}\n"
+            f"Total Tokens Spent: {abs(stats[1] or 0)}\n"
+            f"Total Tokens Earned: {stats[2] or 0}"
+        )
+        await safe_reply(update, context, message)
+
+=== File: C:\Mentor\botAntony\support_manager.py ===
+#Support_manager.py
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackContext, ConversationHandler
+from database import DatabaseConnection
+from utils import safe_reply
+from constants import ADMIN_GROUP_ID
+
+logger = logging.getLogger(__name__)
+
+class SupportManager:
+    def __init__(self, admin_group_id):
+        self.db = DatabaseConnection()
+        self.admin_group_id = admin_group_id
+
+    async def show_support(self, update: Update, context: CallbackContext):
+        """Shows support menu with options."""
+        keyboard = [
+            [InlineKeyboardButton("Написать в поддержку", callback_data="support_write")],
+            [InlineKeyboardButton("Назад", callback_data="back_to_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await safe_reply(
+            update, 
+            context,
+            "Выберите действие:",
+            reply_markup=reply_markup
+        )
+
+    async def handle_support_callback(self, update: Update, context: CallbackContext):
+        """Handle support-related callback queries."""
+        query = update.callback_query
+        await query.answer()
+
+        if query.data == "support_write":
+            return await self.start_support_request(update, context)
+        elif query.data == "back_to_menu":
+            # You'll need to implement this or use menu_manager's method
+            return "ACTIVE"
+
+    async def start_support_request(self, update: Update, context: CallbackContext):
+        """Starts a support request."""
+        await safe_reply(
+            update, 
+            context,
+            "Пожалуйста, опишите вашу проблему или вопрос. Вы также можете прикрепить фотографию."
+        )
+        return "WAIT_FOR_SUPPORT_TEXT"
+
+    async def get_support_text(self, update: Update, context: CallbackContext):
+        """Gets the support request text and sends it to the admin."""
+        user_id = update.effective_user.id
+        logger.info(f"get_support_text for user {user_id}")
+
+        try:
+            if update.message:
+                text = update.message.text
+                context.user_data["support_text"] = text
+            else:
+                logger.warning("This function only works with text messages.")
+                await safe_reply(update, context, "This function only works with text messages.")
+                return
+
+            # Check for photo
+            if update.message.photo:
+                file_id = update.message.photo[-1].file_id
+                context.user_data["support_photo"] = file_id
+            else:
+                context.user_data["support_photo"] = None
+
+            await self.send_support_request_to_admin(update, context)
+            return ConversationHandler.END
+
+        except Exception as e:
+            logger.error(f"Error in get_support_text: {e}")
+            await safe_reply(update, context, "An error occurred while processing your request. Please try again later.")
+            return ConversationHandler.END
+
+    async def process_support_request(self, update: Update, context: CallbackContext):
+
+        """Process the support request and send it to admins."""
+        user_id = update.effective_user.id
+        
+        try:
+            if update.message:
+                text = update.message.text
+                context.user_data["support_text"] = text
+            else:
+                logger.warning("This function only works with text messages.")
+                await safe_reply(update, context, "Эта функция работает только с текстовыми сообщениями.")
+                return
+
+            # Check for photo
+            if update.message.photo:
+                file_id = update.message.photo[-1].file_id
+                context.user_data["support_photo"] = file_id
+            else:
+                context.user_data["support_photo"] = None
+
+            # Send to admin group
+            support_text = context.user_data.get("support_text", "No text provided")
+            support_photo = context.user_data.get("support_photo")
+            
+            caption = f"Новый запрос в поддержку!\nUser ID: {user_id}\nТекст: {support_text}"
+
+            if support_photo:
+                await context.bot.send_photo(
+                    chat_id=self.admin_group_id, 
+                    photo=support_photo, 
+                    caption=caption
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=self.admin_group_id, 
+                    text=caption
+                )
+
+            # Update support request counter
+            cursor = self.db.get_cursor()
+            cursor.execute(
+                "UPDATE users SET support_requests = support_requests + 1 WHERE user_id = ?",
+                (user_id,),
+            )
+            self.db.get_connection().commit()
+
+            await safe_reply(update, context, "Ваш запрос в поддержку отправлен. Ожидайте ответа.")
+            return "ACTIVE"
+
+        except Exception as e:
+            logger.error(f"Error in process_support_request: {e}")
+            await safe_reply(update, context, "Произошла ошибка при обработке запроса. Попробуйте позже.")
+            return "ACTIVE"
+
+    async def send_support_request_to_admin(self, update: Update, context: CallbackContext):
+        """Sends the support request to the administrator."""
+        user_id = update.effective_user.id
+        support_text = context.user_data.get("support_text", "No text provided")
+        support_photo = context.user_data.get("support_photo")
+        logger.info(f"Sending support request to admin from user {user_id}: Text='{support_text[:50]}...', Photo={support_photo}")
+
+        try:
+            # Construct message for the admin
+            caption = f"New support request!\nUser ID: {user_id}\nText: {support_text}"
+
+            # Send message to the administrator
+            if support_photo:
+                await context.bot.send_photo(chat_id=self.admin_group_id, photo=support_photo, caption=caption)
+            else:
+                await context.bot.send_message(chat_id=self.admin_group_id, text=caption)
+
+            # Increase the support request counter
+            cursor = self.db.get_cursor()
+            cursor.execute(
+                "UPDATE users SET support_requests = support_requests + 1 WHERE user_id = ?",
+                (user_id,)
+            )
+            self.db.get_connection().commit()
+
+            await safe_reply(update, context, "Your support request has been sent. Please wait for a response.")
+
+        except Exception as e:
+            logger.error(f"Error sending support request to admin: {e}")
+            await safe_reply(update, context, "Произошла ошибка при отправке запроса. Попробуйте позже.")
+
+support_manager = SupportManager(ADMIN_GROUP_ID)
+
+
+
+=== File: C:\Mentor\botAntony\tariffs.json ===
+[
+  {
+    "id": "course_discount",
+    "title": "Следующий курс со скидкой 40%",
+    "description": "Погрузитесь глубже в мир знаний! Купите любой следующий курс из нашей коллекции со скидкой 40% и откройте для себя новые горизонты.",
+    "price": 0.6,
+    "emoji": "ttt",
+    "type": "discount",
+    "course_type": "main"
+  },
+  {
+    "id": "consultation_package",
+    "title": "Пакет консультаций со скидкой 25%",
+    "description": "Получите индивидуальную поддержку и ответы на все ваши вопросы! Пакет из 3 консультаций с экспертом со скидкой 25%.",
+    "price": 0.75,
+    "emoji": "---",
+     "type": "discount",
+    "course_type": "auxiliary"
+  },
+  {
+    "id": "tea_abonement",
+    "title": "Абонемент в чайную на месяц",
+    "description": "Наслаждайтесь атмосферой гармонии и вкуса! Абонемент на месяц в нашу уютную чайную со скидкой 30%.",
+    "price": 0.7,
+    "emoji": ":-)",
+     "type": "discount",
+    "course_type": "auxiliary"
+  },
+  {
+    "id": "tea_set",
+    "title": "Чайный набор в подарок",
+    "description": "Порадуйте себя или близких изысканным подарком! Набор эксклюзивных чаев и аксессуаров для чайной церемонии.",
+    "price": 5000,
+    "emoji": "<<|>>",
+    "type": "payment",
+    "course_type": "main"
+  },
+  {
+    "id": "personal_ceremony",
+    "title": "Индивидуальная чайная церемония",
+    "description": "Погрузитесь в мир гармонии и релаксации! Индивидуальная чайная церемония от нашего мастера со скидкой 20%.",
+    "price": 0.8,
+    "emoji": "+++",
+     "type": "discount",
+    "course_type": "auxiliary"
+  }
+]
+
+
+=== File: C:\Mentor\botAntony\token_manager.py ===
+#token_manager.py
+from datetime import datetime, date
+import logging
+import sqlite3
+import random
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackContext
+from database import DatabaseConnection, load_bonuses
+from utils import safe_reply
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+class TokenManager:
+    def __init__(self, admin_ids):
+        self.admin_ids = admin_ids
+        self.db = DatabaseConnection()
+        self.shop_manager = None
+        self.bonuses_config = None
+
+    def get_last_bonus_date(self, cursor: sqlite3.Cursor, user_id: int) -> date or None:
+        """Получает дату последнего начисления ежемесячного бонуса."""
+        cursor.execute(
+            """
+            SELECT last_bonus_date FROM users WHERE user_id = ?
+        """,
+            (user_id,),
+        )
+        result = cursor.fetchone()
+        last_bonus_date_str = result[0] if result else None
+        if last_bonus_date_str:
+            return datetime.strptime(last_bonus_date_str, "%Y-%m-%d").date()
+        return None
+
+    def set_last_bonus_date(self, cursor: sqlite3.Cursor, user_id: int, date: date):
+        """Устанавливает дату последнего начисления ежемесячного бонуса."""
+        cursor.execute(
+            """
+            UPDATE users SET last_bonus_date = ? WHERE user_id = ?
+        """,
+            (date.strftime("%Y-%m-%d"), user_id),
+        )
+
+    async def roll_lootbox(self, box_type: str):
+        """Determines the reward from a lootbox."""
+        db = DatabaseConnection()
+        conn = db.get_connection()
+        cursor = db.get_cursor()
+
+        try:
+            cursor.execute("SELECT reward, probability FROM lootboxes WHERE box_type = ?", (box_type,))
+            rewards = cursor.fetchall()
+
+            # Generate random number
+            rand = random.random()
+
+            cumulative_probability = 0.0
+            for reward, probability in rewards:
+                cumulative_probability += probability
+                if rand <= cumulative_probability:
+                    logger.info(f"Reward {reward} dropped from lootbox {box_type}")
+                    return reward
+            return "nothing"  # If nothing dropped
+        except sqlite3.Error as e:
+            logger.error(f"Error while determining reward from lootbox {box_type}: {e}")
+            return "error"
+
+    async def show_token_balance(self, update: Update, context: CallbackContext):
+        user_id = update.effective_user.id
+        tokens, trust_credit, monthly_increase = self.get_balance_info(user_id)
+        
+        message = (
+            f"💰 Ваш баланс:\n"
+            f"AntCoins: {tokens}\n"
+            f"Кредит доверия: {trust_credit}\n"
+            f"Ежемесячное увеличение: {monthly_increase}"
+        )
+        await safe_reply(update, context, message)
+
+    async def buy_lootbox(self, update: Update, context: CallbackContext):
+        user_id = update.effective_user.id
+        tokens, _, _ = self.get_balance_info(user_id)
+        
+        LOOTBOX_COST = 10  # Define the cost of a lootbox
+        
+        try:
+            if tokens < LOOTBOX_COST:
+                await safe_reply(update, context, "Недостаточно AntCoins для покупки лутбокса!")
+                return
+            
+            # Deduct tokens first
+            if not await self.spend_tokens(user_id, LOOTBOX_COST, "Покупка лутбокса"):
+                await safe_reply(update, context, "Ошибка при покупке лутбокса")
+                return
+                
+            # Roll the lootbox and get reward
+            reward = await self.roll_lootbox("light")  # Using "light" as default box type
+            
+            # Process the reward
+            reward_message = f"🎉 Вы открыли лутбокс и получили: {reward}!"
+            await safe_reply(update, context, reward_message)
+            
+            # Handle the reward (implement reward processing logic)
+            if reward == "скидка":
+                # Add discount processing
+                pass
+            elif reward == "товар":
+                # Add item processing
+                pass
+                
+        except Exception as e:
+            logger.error(f"Error in buy_lootbox: {e}")
+            await safe_reply(update, context, "Произошла ошибка при покупке лутбокса")
+            return
+            
+    # Add these methods to TokenManager class
+    async def add_tokens(self, user_id: int, amount: int, reason: str, update: Update, context: CallbackContext):
+
+        """Начисляет жетоны пользователю, включая различные бонусы."""
+        db = DatabaseConnection()
+        conn = db.get_connection()
+        cursor = db.get_cursor()
+
+        try:
+            global bonuses_config
+            if bonuses_config is None:  # Load only if not initialized
+                bonuses_config = load_bonuses()
+                
+            with conn:
+                today = date.today()
+
+                # Keep your existing user data query
+                cursor.execute(
+                    """
+                    SELECT birthday, registration_date, referral_count FROM users WHERE user_id = ?
+                    """,
+                    (user_id,),
+                )
+                user_data = cursor.fetchone()
+
+                if not user_data:
+                    logger.warning(f"Не найден пользователь {user_id} при попытке начисления бонусов.")
+                    await safe_reply(update, context, "Пользователь не найден.")
+                    return
+
+                # Keep your existing data processing
+                birthday_str, registration_date_str, referral_count = user_data
+                birthday = datetime.strptime(birthday_str, "%Y-%m-%d").date() if birthday_str else None
+                registration_date = datetime.strptime(registration_date_str, "%Y-%m-%d").date() if registration_date_str else None
+                referral_count = referral_count if referral_count else 0
+
+                # Your existing bonus calculations
+                monthly_bonus_amount = bonuses_config.get("monthly_bonus", 1)
+                last_bonus_date = self.get_last_bonus_date(cursor, user_id)
+                if not last_bonus_date or (last_bonus_date.year != today.year or last_bonus_date.month != today.month):
+                    amount += monthly_bonus_amount
+                    reason += f" + Ежемесячный бонус ({monthly_bonus_amount})"
+                    self.set_last_bonus_date(cursor, user_id, today)
+                    logger.info(f"Начислен ежемесячный бонус пользователю {user_id}")
+
+                # Keep your birthday bonus logic
+                birthday_bonus_amount = bonuses_config.get("birthday_bonus", 5)
+                if birthday and birthday.month == today.month and birthday.day == today.day:
+                    amount += birthday_bonus_amount
+                    reason += f" + Бонус на день рождения ({birthday_bonus_amount})"
+                    logger.info(f"Начислен бонус на день рождения пользователю {user_id}")
+
+                # Keep your referral bonus logic
+                referral_bonus_amount = bonuses_config.get("referral_bonus", 2)
+                if referral_count > 0:
+                    amount += referral_bonus_amount * referral_count
+                    reason += f" + Бонус за рефералов ({referral_bonus_amount * referral_count})"
+                    logger.info(f"Начислен бонус за рефералов пользователю {user_id}")
+
+                # Update tokens
+                cursor.execute(
+                    """
+                    INSERT INTO user_tokens (user_id, tokens)
+                    VALUES (?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET tokens = tokens + ?
+                    """,
+                    (user_id, amount, amount),
+                )
+
+                # Log transaction
+                cursor.execute(
+                    """
+                    INSERT INTO transactions (user_id, action, amount, reason)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user_id, "earn", amount, reason),
+                )
+                
+                conn.commit()
+                logger.info(f"Начислено {amount} жетонов пользователю {user_id} по причине: {reason}")
+                
+                if update and context:
+                    await safe_reply(update, context, f"Начислено {amount} АнтКоинов!")
+                    
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка при начислении жетонов пользователю {user_id}: {e}")
+            if update and context:
+                await safe_reply(update, context, f"Произошла ошибка при начислении жетонов пользователю {user_id}: {e}")
+            conn.rollback()
+            raise
+        
+    def get_balance_info(self, user_id: int):
+        """Retrieves user's token balance, trust credit, and monthly trust increase."""
+        cursor = self.db.get_cursor()
+        
+        cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
+        tokens_data = cursor.fetchone()
+        tokens = tokens_data[0] if tokens_data else 0
+
+        cursor.execute("SELECT trust_credit FROM users WHERE user_id = ?", (user_id,))
+        credit_data = cursor.fetchone()
+        trust_credit = credit_data[0] if credit_data else 0
+
+        monthly_trust_increase = 2  # Default value
+
+        return tokens, trust_credit, monthly_trust_increase
+
+    def get_token_balance(self, user_id: int) -> int:
+        """Returns user's current token balance."""
+        cursor = self.db.get_cursor()
+        try:
+            cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
+            balance_data = cursor.fetchone()
+            return balance_data[0] if balance_data else 0
+        except sqlite3.Error as e:
+            logger.error(f"Error getting token balance for user {user_id}: {e}")
+            return 0
+
+    def spend_tokens(self, user_id: int, amount: int, reason: str):
+        """Deducts tokens from user's balance."""
+        conn = self.db.get_connection()
+        cursor = self.db.get_cursor()
+        try:
+            with conn:
+                # Check balance
+                cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
+                balance_data = cursor.fetchone()
+                if not balance_data or balance_data[0] < amount:
+                    raise ValueError("Insufficient tokens")
+
+                # Deduct tokens
+                cursor.execute(
+                    "UPDATE user_tokens SET tokens = tokens - ? WHERE user_id = ?",
+                    (amount, user_id)
+                )
+
+                # Log transaction
+                cursor.execute(
+                    """
+                    INSERT INTO transactions (user_id, action, amount, reason)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user_id, "spend", amount, reason)
+                )
+            logger.info(f"Deducted {amount} tokens from user {user_id} for: {reason}")
+        except sqlite3.Error as e:
+            logger.error(f"Error deducting tokens from user {user_id}: {e}")
+            raise
+
+    def get_last_bonus_date(self, user_id: int) -> date:
+        """Gets the date of last monthly bonus payment."""
+        cursor = self.db.get_cursor()
+        
+        cursor.execute("SELECT last_bonus_date FROM users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        last_bonus_date_str = result[0] if result else None
+        
+        if last_bonus_date_str:
+            return datetime.strptime(last_bonus_date_str, "%Y-%m-%d").date()
+        return None
+
+    def set_last_bonus_date(self, user_id: int, bonus_date: date):
+        """Sets the date of last monthly bonus payment."""
+        conn = self.db.get_connection()
+        cursor = self.db.get_cursor()
+        
+        cursor.execute(
+            "UPDATE users SET last_bonus_date = ? WHERE user_id = ?",
+            (bonus_date.strftime("%Y-%m-%d"), user_id)
+        )
+        conn.commit()
+
+
+
+
+
+
+=== File: C:\Mentor\botAntony\utils.py ===
+# utils.py
+import logging
+from telegram import Update, InlineKeyboardMarkup
+from telegram.ext import CallbackContext
+from telegram.error import TelegramError
+from datetime import date
+import mimetypes # ADD THIS LINE
+from database import DatabaseConnection, load_ad_config, load_courses, load_bonuses
+
+logger = logging.getLogger(__name__)
+
+async def safe_reply(update: Update, context: CallbackContext, text: str,
+                    reply_markup: InlineKeyboardMarkup | None = None):
+    """Safely sends a text message."""
+    # Get user ID safely, handling None case
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id is None:
+        logger.error("Could not get user ID - effective_user is None")
+        return
+
+    try:
+        if update.callback_query:
+            # Если это callback_query, отвечаем на него
+            await update.callback_query.answer()  # Подтверждаем получение callback_query
+            if update.callback_query.message:
+                await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
+            else:
+                logger.warning("Это была не кнопка. калбэк - None")
+                await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
+        else:
+            # Если это обычное сообщение, отправляем новое сообщение
+            await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
+
+    except TelegramError as e:
+        logger.error(f"Ошибка при отправке сообщения: {e}")
+
+def handle_telegram_errors(func):
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except TelegramError as e:
+            # Telegram API ошибки (например, сетевые проблемы)
+            logger.error(f"Telegram API Error в функции {func.__name__}: {e}")
+            update = kwargs.get("update") or args[0] if args else None
+            if update:
+                await update.effective_message.reply_text(
+                    "Ошибка взаимодействия с Telegram. Попробуйте позже."
+                )
+        except sqlite3.Error as e:
+            # Ошибки базы данных
+            logger.error(f"Database Error в функции {func.__name__}: {e}")
+            update = kwargs.get("update") or args[0] if args else None
+            if update:
+                await update.effective_message.reply_text(
+                    "Ошибка базы данных. Попробуйте позже."
+                )
+        except Exception as e:
+            # Все остальные ошибки
+            logger.error(f"Непредвиденная ошибка в функции {func.__name__}: {e}")
+            update = kwargs.get("update") or args[0] if args else None
+            if update:
+                await update.effective_message.reply_text(
+                    "Произошла ошибка. Попробуйте позже."
+                )
+    return wrapper
+
+#  Add a custom error handler decorator
+def old_handle_telegram_errors(func):
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except TelegramError as e:
+            logger.error(f"Telegram API Error: {e}")
+            # Handle specific error types
+        except Exception as e:
+            logger.error(f"General Error: {e}")
+
+    return wrapper
+
+
+def is_admin(user_id: int) -> bool:
+    """Check if user is an admin."""
+    db = DatabaseConnection()
+    cursor = db.get_cursor()
+    cursor.execute("SELECT level FROM admins WHERE admin_id = ?", (user_id,))
+    result = cursor.fetchone()
+    return bool(result)
+
+
+def escape_markdown_v2(text):
+    """Escapes special characters for Markdown V2."""
+    escape_chars = r"_*[]()~`>#+-=|{}.!"
+    return "".join(f"\\{char}" if char in escape_chars else char for char in text)
+
+
+def parse_delay_from_filename(filename):
+    """Extracts delay time from filename."""
+    match = DELAY_PATTERN.search(filename)
+    if not match:
+        return None
+
+    value, unit = match.groups()
+    value = int(value)
+
+    if unit == "m":  # minutes
+        return value * 60
+    elif unit == "h":  # hours
+        return value * 3600
+    return None
+
+async def send_file(bot, chat_id, file_path, file_name):
+    """Sends file to user with improved error handling and detailed logging."""
+    # ... move the send_file implementation here ...
+
+def get_date(date_string: str):
+    """Converts a date string from the format %Y-%m-%d to a date object."""
+    try:
+        return datetime.strptime(date_string, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+def format_date(date: date):
+    """Formats a date object to a string in the format %Y-%m-%d."""
+    return date.strftime("%Y-%m-%d")
+
+def get_ad_message():
+    """Возвращает рекламное сообщение """
+    courses = load_courses()
+    courses_for_bonus = [course for course in courses if "bonus_price" in course]
+    if courses_for_bonus:
+        ad_message = "Хотите больше контента?\n"
+        for course in courses_for_bonus:
+            ad_message += (
+                f"- Курс '{course['course_name']}' можно приобрести за {course['bonus_price']} antCoins.\n"
+            )
+        return ad_message
+    else:
+        return "У нас много интересного! Узнайте больше о доступных курсах и возможностях."
+
+
+def maybe_add_ad(message_list):
+    """Adds an ad message to the list based on the configured percentage."""
+    ad_percentage = load_ad_config().get("ad_percentage", 0.3)  # Ensure ad_config is loaded
+    if len(message_list) > 0 and random.random() < ad_percentage:
+        ad_message = get_ad_message()  # Function to get a promotional message
+        message_list.append(ad_message)  # Add it at the end or a random position
+    return message_list
+
+
+=== File: C:\Mentor\botAntony\__init__.py ===
+
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson1.txt ===
+Задание 1 аутогенной
+Начало пути
+Сейчас ты здесь, и, возможно не чувствуешь себя достаточно хорошо. Однако знай, что ты обладаешь уникальным источником радости и мудрости. Это твоё, самое ценное. Это твоя женственность. Она всегда с тобой. Давай вместе поищем это состояние силы и радости.
+Для магии тебе понадобятся:
+— бумага;
+— 20-30 минут времени.
+Посвяти время только себе, отключи телефон, чтобы ничего не отвлекало.
+Почувствуй себя маленькой девочкой, закройся в комнате, забудь про всех и порисуй!
+Задание
+Нарисуй существующий барьер между женственностью и собой
+Пришли фотографию хорошего качества в качестве ответа на домашнее задание
+Задание 2
+Выбери себе ежедневник, тетрадь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson10.txt ===
+Задание 10.
+
+тееест10
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson11.txt ===
+Задание 5.
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson2.txt ===
+Задание 2 аутогенной
+
+тееест
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson3.txt ===
+Задание 3 аутогенной
+
+тееест3
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson4.txt ===
+Задание 4 аутогенной
+
+тееест4
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson5.txt ===
+Задание 5 аутогенной
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson6.txt ===
+Задание 6
+ просто отдохни
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson7.txt ===
+Задание 7
+
+тееест5
+дь или блокнот,777
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson8.txt ===
+Задание 8
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\autogenic\lesson9.txt ===
+Задание 9
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson1.txt ===
+﻿Это первый урок в простом текстовом файле
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson10.txt ===
+Задание 10  женственности.
+
+тееест10
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson11.txt ===
+Задание 11  женственности.
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson1_1m.txt ===
+﻿<h1>Урок 1: Введение в курс</h1>
+<p>Добро пожаловать на первый урок! Здесь вы узнаете основы курса.</p>
+<ul>
+    <li><strong>Тема 1:</strong> Основные понятия</li>
+    <li><strong>Тема 2:</strong> Практические примеры</li>
+</ul>
+<p>Для дополнительной информации перейдите по <a href="https://ya.ru">этой ссылке</a>.</p>
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson1_3.txt ===
+﻿<h1>Урок 1: Введение в курс</h1>
+<p>Добро пожаловать на первый урок! Здесь вы узнаете основы курса.</p>
+<ul>
+    <li><strong>Тема 1:</strong> Основные понятия</li>
+    <li><strong>Тема 2:</strong> Практические примеры</li>
+</ul>
+<p>Для дополнительной информации перейдите по <a href="https://ya.ru">этой ссылке</a>.</p>
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson1_p.txt ===
+ПредЗадание 1 женственности. Арт-терапия
+Начало пути
+Сейчас ты здесь, и, возможно не чувствуешь себя достаточно хорошо. Однако знай, что ты обладаешь уникальным источником радости и мудрости. Это твоё, самое ценное. Это твоя женственность. Она всегда с тобой. Давай вместе поищем это состояние силы и радости.
+Для магии тебе понадобятся:
+— бумага;
+— 20-30 минут времени.
+
+всё. планируй время и начинай
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson2.txt ===
+Задание 2  женственности.
+
+тееест
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson2_p.txt ===
+Задание 2  женственности.
+
+тееест
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson3.txt ===
+Задание 3  женственности.
+
+тееест3
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson3_5min.txt ===
+прошло 5 минут
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson3_p.txt ===
+Задание 2  женственности.
+
+тееест
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson4.txt ===
+Задание 4  женственности.
+
+тееест4
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson4_3m.txt ===
+﻿файл пришел 
+Задержка 3 мин
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson4_p.txt ===
+Задание 2  женственности.
+
+тееест
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson5.txt ===
+Задание 5  женственности.
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson6.txt ===
+Задание 6  женственности
+ просто отдохни
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson6_p.txt ===
+Задание 6  женственности
+ просто отдохни
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson7.txt ===
+Задание 7  женственности
+
+тееест5
+дь или блокнот,777
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson7_p.txt ===
+Задание 7  женственности
+
+тееест5
+дь или блокнот,777
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson8.txt ===
+Задание 8  женственности
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson8_2h.txt ===
+Задание 8  женственности
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson8_5min.txt ===
+Задание 8  женственности
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson8_p.txt ===
+Задание 8  женственности
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\femininity\lesson9.txt ===
+Задание 9  женственности
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson1.txt ===
+Задание 1. Арт-терапия
+Начало пути
+Сейчас ты здесь, и, возможно не чувствуешь себя достаточно хорошо. Однако знай, что ты обладаешь уникальным источником радости и мудрости. Это твоё, самое ценное. Это твоя женственность. Она всегда с тобой. Давай вместе поищем это состояние силы и радости.
+Для магии тебе понадобятся:
+— бумага;
+— 20-30 минут времени.
+Посвяти время только себе, отключи телефон, чтобы ничего не отвлекало.
+Почувствуй себя маленькой девочкой, закройся в комнате, забудь про всех и порисуй!
+Задание
+Нарисуй существующий барьер между женственностью и собой
+Пришли фотографию хорошего качества в качестве ответа на домашнее задание
+Задание 2
+Выбери себе ежедневник, тетрадь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson10.txt ===
+Задание 10.
+
+тееест10
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson11.txt ===
+Задание 5.
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson2.txt ===
+Задание 2.
+
+тееест
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson3.txt ===
+Задание 3.
+
+тееест3
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson4.txt ===
+Задание 4.
+
+тееест4
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson5.txt ===
+Задание 5.
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson6.txt ===
+Задание 6
+ просто отдохни
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson7.txt ===
+Задание 7
+
+тееест5
+дь или блокнот,777
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson8.txt ===
+Задание 8
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\courses\lessons\lesson9.txt ===
+Задание 9
+
+тееест5
+дь или блокнот, чтобы он тебе нравился и приносил удовольствие. В него ты будешь записывать свои наблюдения. Он станет свидетелем твоего пути к себе. В сложные минуты записи в нём будут напоминать тебе твои же ориентиры. Отныне он твой надежный друг и помощник — путевой дневник женственности.
+
+=== File: C:\Mentor\botAntony\tests\test_utils.py ===
+import unittest
+from datetime import date
+from unittest.mock import MagicMock, patch
+from telegram import Update, InlineKeyboardMarkup, User, Message, Chat, CallbackQuery
+from telegram.ext import CallbackContext
+from telegram.error import TelegramError
+import logging
+import re
+import os
+import mimetypes
+from io import BytesIO  # Import BytesIO for in-memory file handling
+import sys
+import os
+
+# Добавьте путь к корневой директории проекта в sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Assuming your utils.py is in the same directory as your test
+from utils import (
+    safe_reply,
+    handle_telegram_errors,
+    is_admin,
+    escape_markdown_v2,
+    parse_delay_from_filename,
+    send_file,
+    get_date,
+    format_date,
+    get_ad_message,
+    maybe_add_ad
+)
+from database import DatabaseConnection, load_ad_config, load_courses, load_bonuses
+
+# Mocking the logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Mock constants
+DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")
+
+# Mock DatabaseConnection and related methods
+class MockDatabaseConnection:
+    def __init__(self):
+        self.cursor = MagicMock()
+        self.connection = MagicMock()
+
+    def get_connection(self):
+        return self.connection
+
+    def get_cursor(self):
+        return self.cursor
+
+# Mock load_courses, load_bonuses, and load_ad_config
+def mock_load_courses():
+    return [
+        {"course_name": "Test Course 1", "bonus_price": 100},
+        {"course_name": "Test Course 2"}
+    ]
+
+def mock_load_bonuses():
+    return {"bonus_percentage": 0.2}
+
+def mock_load_ad_config():
+    return {"ad_percentage": 0.5}
+
+# Patch these functions
+@patch('utils.load_courses', side_effect=mock_load_courses)
+@patch('utils.load_bonuses', side_effect=mock_load_bonuses)
+@patch('utils.load_ad_config', side_effect=mock_load_ad_config)
+class TestUtils(unittest.IsolatedAsyncioTestCase):  # Use IsolatedAsyncioTestCase
+
+    async def asyncSetUp(self):
+        """Set up method to create mock objects for testing."""
+        self.mock_update = MagicMock(spec=Update)
+        self.mock_context = MagicMock(spec=CallbackContext)
+        self.mock_user = MagicMock(spec=User)
+        self.mock_chat = MagicMock(spec=Chat)
+        self.mock_message = MagicMock(spec=Message)
+        self.mock_callback_query = MagicMock(spec=CallbackQuery)
+
+        # Set up basic attributes
+        self.mock_update.effective_user = self.mock_user
+        self.mock_update.effective_chat = self.mock_chat
+        self.mock_update.effective_message = self.mock_message
+        self.mock_user.id = 12345
+        self.mock_chat.id = 54321
+
+        # Set up bot attribute for mock_context
+        self.mock_context.bot = MagicMock()
+        self.mock_context.user_data = {}
+
+    async def test_safe_reply_new_message(self):
+        await safe_reply(self.mock_update, self.mock_context, "Test message")
+        self.mock_context.bot.send_message.assert_called_once_with(chat_id=54321, text="Test message", reply_markup=None)
+
+    async def test_safe_reply_callback_query_with_message(self):
+        # Simulate a callback query with a message
+        self.mock_update.callback_query = self.mock_callback_query
+        self.mock_callback_query.message = self.mock_message
+
+        await safe_reply(self.mock_update, self.mock_context, "Test message")
+
+        # Check that answer was called on the callback query
+        self.mock_update.callback_query.answer.assert_called_once()
+
+        # Check that reply_text was called on the message
+        self.mock_update.callback_query.message.reply_text.assert_called_once_with("Test message", reply_markup=None)
+
+        # Reset callback_query.message for other tests
+        self.mock_update.callback_query.message = None
+
+    @patch('utils.DatabaseConnection', return_value=MockDatabaseConnection())
+    def test_is_admin(self, MockDatabaseConnection):
+        # Mocking the database connection and cursor
+        mock_db = MockDatabaseConnection()
+        mock_cursor = mock_db.get_cursor()
+        mock_cursor.fetchone.return_value = (1,)  # Simulating an admin user
+
+        result = is_admin(12345)
+        self.assertTrue(result)
+
+        mock_cursor.fetchone.return_value = None  # Simulating a non-admin user
+        result = is_admin(54321)
+        self.assertFalse(result)
+
+    def test_escape_markdown_v2(self):
+        test_string = r"*_[]()~`>#+-=|{}.!"
+        escaped_string = escape_markdown_v2(test_string)
+        self.assertEqual(escaped_string, r"\*\_\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!")
+
+    def test_parse_delay_from_filename(self):
+        self.assertEqual(parse_delay_from_filename("file_10m.txt"), 600)
+        self.assertEqual(parse_delay_from_filename("file_1h.txt"), 3600)
+        self.assertIsNone(parse_delay_from_filename("file.txt"))
+
+    @patch('os.path.exists', return_value=True)
+    @patch('mimetypes.guess_type', return_value=('image/jpeg', None))
+    async def test_send_file_image(self, mock_guess_type, mock_exists):
+        mock_bot = MagicMock()
+        file_path = "path/to/image.jpg"
+        chat_id = 12345
+        file_name = "image.jpg"
+
+        # Create a dummy file for testing
+        with patch("builtins.open", return_value=BytesIO(b"test data")):
+            await send_file(mock_bot, chat_id, file_path, file_name)
+
+        # Assert that send_photo was called with the correct arguments
+        mock_bot.send_photo.assert_called_once()
+        args, kwargs = mock_bot.send_photo.call_args
+        self.assertEqual(args[0], chat_id)
+        self.assertIsInstance(kwargs['photo'], BytesIO)
+
+    def test_get_date(self):
+        self.assertEqual(get_date("2025-03-21"), date(2025, 3, 21))
+        self.assertIsNone(get_date("invalid-date"))
+
+    def test_format_date(self):
+        test_date = date(2025, 3, 21)
+        self.assertEqual(format_date(test_date), "2025-03-21")
+
+    def test_get_ad_message(self, mock_load_ad_config, mock_load_bonuses, mock_load_courses):
+        # Test when there are courses with bonus prices
+        courses_with_bonus = [{"course_name": "Bonus Course", "bonus_price": 50}]
+        mock_load_courses.return_value = courses_with_bonus
+        ad_message = get_ad_message()
+        self.assertIn("Хотите больше контента?", ad_message)
+        self.assertIn("Курс 'Bonus Course'", ad_message)
+
+        # Test when there are no courses with bonus prices
+        mock_load_courses.return_value = [{"course_name": "Regular Course"}]
+        ad_message = get_ad_message()
+        self.assertEqual(ad_message, "У нас много интересного! Узнайте больше о доступных курсах и возможностях.")
+
+    def test_maybe_add_ad(self, mock_load_ad_config, mock_load_bonuses, mock_load_courses):
+        message_list = ["Message 1", "Message 2"]
+        mock_load_ad_config.return_value = {"ad_percentage": 1.0}  # Always add ad
+        ad_message = "Ad message"
+        with patch('utils.get_ad_message', return_value=ad_message):
+            updated_list = maybe_add_ad(message_list)
+        self.assertIn(ad_message, updated_list)
+
+if __name__ == '__main__':
+    unittest.main()
+
+
+=== File: C:\Mentor\botAntony\tests\__init__.py ===
+
+
+=== File: C:\Mentor\botAntony\tests\описание.txt ===
+Обзор реализованных тестов:
+
+test_safe_reply_new_message:
+
+Проверяет, что функция safe_reply отправляет новое сообщение пользователю через bot.send_message.
+
+Использует mock_context.bot.send_message.assert_called_once_with, чтобы убедиться, что метод send_message был вызван один раз с ожидаемыми аргументами (chat_id, text, reply_markup).
+
+test_safe_reply_callback_query_with_message:
+
+Проверяет, что функция safe_reply отвечает на callback_query (нажатие кнопки) и отправляет ответ через reply_text.
+
+Убеждается, что методы query.answer() и query.message.reply_text() были вызваны с правильными аргументами.
+
+test_is_admin:
+
+Проверяет, что функция is_admin возвращает True, если пользователь является администратором, и False в противном случае.
+
+Использует MockDatabaseConnection для мокирования соединения с базой данных и результатов запросов.
+
+Убеждается, что is_admin возвращает правильные значения на основе мокированных данных.
+
+test_escape_markdown_v2:
+
+Проверяет, что функция escape_markdown_v2 правильно экранирует специальные символы в тексте.
+
+Убеждается, что все символы в escape_chars правильно экранированы.
+
+test_parse_delay_from_filename:
+
+Проверяет, что функция parse_delay_from_filename правильно извлекает время задержки из имени файла и возвращает его в секундах.
+
+Проверяет случаи, когда задержка указана в минутах, часах и когда задержка отсутствует.
+
+test_send_file_image:
+
+Проверяет, что функция send_file отправляет файл как изображение через bot.send_photo.
+
+Мокирует файловые операции os.path.exists и mimetypes.guess_type, а также открытие файла через open.
+
+Убеждается, что bot.send_photo был вызван с правильными аргументами (chat_id, photo) и что файл отправлен как BytesIO.
+
+test_get_date:
+
+Проверяет, что функция get_date правильно преобразует строку даты в объект date.
+
+Убеждается, что функция возвращает правильный объект date для валидной строки и None для невалидной строки.
+
+test_format_date:
+
+Проверяет, что функция format_date правильно форматирует объект date в строку.
+
+Убеждается, что строка отформатирована в соответствии с форматом %Y-%m-%d.
+
+test_get_ad_message:
+
+Проверяет, что функция get_ad_message возвращает правильное рекламное сообщение в зависимости от наличия курсов с бонусными ценами.
+
+Использует mock_load_courses для мокирования списка курсов.
+
+Убеждается, что рекламное сообщение содержит текст "Хотите больше контента?" и информацию о курсах с бонусными ценами, если такие курсы есть.
+
+test_maybe_add_ad:
+
+Проверяет, что функция maybe_add_ad добавляет рекламное сообщение в список сообщений с заданной вероятностью.
+
+Мокирует load_ad_config и get_ad_message.
+
+Убеждается, что рекламное сообщение добавлено в список, когда ad_percentage равно 1.0.

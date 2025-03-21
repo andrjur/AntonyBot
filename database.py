@@ -5,8 +5,7 @@ import json  # Import json
 from telegram import Update
 from telegram.ext import CallbackContext
 from constants import CONFIG_FILES
-# Импортируем функции из utils.py
-from utils import safe_reply
+
 
 # Configuration constants
 DATABASE_FILE = "bot_db.sqlite"

@@ -61,6 +61,15 @@ CONFIG_FILES = {
     "DELAY_MESSAGES": os.path.join(BASE_DIR, "config", "delay_messages.txt"),
 }
 
+CONFIG_FILES = {
+    "TARIFFS": "tariffs.json",
+    "COURSES": "courses.json",
+    "AD_CONFIG": "ad_config.json",
+    "BONUSES": "bonuses.json",
+    "PAYMENT_INFO": "payment_info.json",
+    "DELAY_MESSAGES": "delay_messages.txt",
+}
+
 # Database Settings
 DB_FILE = os.path.join(BASE_DIR, "bot_database.db")
 

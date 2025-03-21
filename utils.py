@@ -4,6 +4,8 @@ from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 from telegram.error import TelegramError
 from datetime import date
+import mimetypes # ADD THIS LINE
+from database import DatabaseConnection, load_ad_config, load_courses, load_bonuses
 
 logger = logging.getLogger(__name__)
 

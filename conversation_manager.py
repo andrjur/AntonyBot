@@ -1,7 +1,6 @@
 # conversation_manager.py
 import logging
 import sqlite3
-import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ConversationHandler,
@@ -40,9 +39,9 @@ class ConversationManager:
     def create_conversation_handler(self):
         """Creates and returns the conversation handler with all states and handlers."""
         return ConversationHandler(
-            entry_points=[telegram.ext.CommandHandler("start", self.start)],
+            entry_points=[CommandHandler("start", self.start)],
             states={
-                WAIT_FOR_NAME: [telegram.ext.MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_user_info)],
+                WAIT_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_user_info)],
                 WAIT_FOR_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_code_words)],
                 ACTIVE: [
                     CommandHandler("lesson", self.course_manager.get_current_lesson),
@@ -56,10 +55,72 @@ class ConversationManager:
                 WAIT_FOR_GIFT_USER_ID: [MessageHandler(filters.TEXT, self.purchase_manager.process_gift_user_id)],
                 WAIT_FOR_PHONE_NUMBER: [MessageHandler(filters.CONTACT, self.purchase_manager.process_phone_number)],
             },
-            fallbacks=[telegram.ext.CommandHandler("cancel", self.cancel)],
+            fallbacks=[CommandHandler("cancel", self.cancel)],
             name="my_conversation",
             allow_reentry=True,
         )
+
+    async def start(self, update: Update, context: CallbackContext):
+        """
+        Обрабатывает команду /start.
+        Инициализирует взаимодействие с пользователем и управляет потоком разговора на основе состояния пользователя.
+        """
+        db = DatabaseConnection()
+        conn = db.get_connection()
+        cursor = db.get_cursor()
+
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id is None:
+            logger.error("Could not get user ID - effective_user is None")
+            return ConversationHandler.END
+
+        logger.info(
+            f"Начало разговора с пользователем {user_id} ================================================================="
+        )
+        logger.info(f"Пользователь {user_id} запустил команду /start")
+
+        # Проверка существования пользователя в базе данных
+        cursor.execute(
+            "SELECT user_id, active_course_id, full_name FROM users WHERE user_id = ?",
+            (user_id,)
+        )
+        user_data = cursor.fetchone()
+
+        # Отправка приветственного сообщения
+        await update.effective_message.reply_text(f"👋 Привет! ID пользователя: {user_id}")
+
+        if not user_data:
+            # Новый пользователь - запрос имени
+            logger.info(f"Новый пользователь {user_id} - запрашиваем имя")
+            context.user_data["waiting_for_name"] = True
+            keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.effective_message.reply_text(
+                "📝 Пожалуйста, введите ваше имя:",
+                reply_markup=reply_markup
+            )
+            return WAIT_FOR_NAME
+
+        # Существующий пользователь - проверка статуса курса
+        active_course = user_data[1]
+        full_name = user_data[2]
+
+        if not active_course:
+            # Нет активного курса - запрос кода активации
+            logger.info(f"Пользователю {user_id} требуется активация курса")
+            context.user_data["waiting_for_code"] = True
+            keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.effective_message.reply_text(
+                f"📝 {full_name}, пожалуйста, введите кодовое слово для активации курса:",
+                reply_markup=reply_markup
+            )
+            return WAIT_FOR_CODE
+
+        # У пользователя есть активный курс - показываем главное меню
+        logger.info(f"У пользователя {user_id} есть активный курс, показываем главное меню")
+        await self.menu_manager.show_main_menu(update, context)
+        return ACTIVE
 
     async def handle_user_info(self, update: Update, context: CallbackContext):
         db = DatabaseConnection()
@@ -70,14 +131,13 @@ class ConversationManager:
         if user_id is None:
             logger.error("Could not get user ID - effective_user is None")
             return
+
         full_name = update.effective_message.text.strip() if update.effective_message and update.effective_message.text else ""
         logger.info(f" handle_user_info {user_id} ============================================")
 
         if not full_name:
             await update.effective_message.reply_text("Имя не может быть пустым. Введите ваше полное имя:")
             return WAIT_FOR_NAME
-
-        logger.info(f" full_name {full_name} ==============================")
 
         try:
             if cursor:
@@ -131,14 +191,24 @@ class ConversationManager:
             try:
                 success = await self.course_manager.activate_course(update, context, user_id, user_code)
                 if success:
-                    await safe_reply(update, context, "Course activated! Get your first lesson.")
+                    await safe_reply(update, context, "Курс активирован! Получите свой первый урок.")
                     await self.course_manager.get_current_lesson(update, context)
                     return ACTIVE
             except Exception as e:
                 logger.error(f"Error in handle_code_words: {e}")
-                await safe_reply(update, context, "Error activating course. Please try again later.")
+                await safe_reply(update, context, "Ошибка при активации курса. Пожалуйста, попробуйте позже.")
                 return WAIT_FOR_CODE
         else:
-            await safe_reply(update, context, "Invalid code word. Please try again.")
+            await safe_reply(update, context, "Неверное кодовое слово. Пожалуйста, попробуйте снова.")
             return WAIT_FOR_CODE
 
+    async def cancel(self, update: Update, context: CallbackContext):
+        """Handles cancellation of the conversation."""
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id is None:
+            logger.error("Could not get user ID - effective_user is None")
+            return ConversationHandler.END
+
+        logger.info(f"User {user_id} canceled the conversation.")
+        await update.message.reply_text("Диалог отменен. До свидания!")
+        return ConversationHandler.END
