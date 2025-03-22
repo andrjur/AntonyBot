@@ -33,7 +33,7 @@ ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
 
 
 ADMIN_IDS = [int(id_) for id_ in os.getenv("ADMIN_IDS", "").split(",") if id_]
-logger.info(f"Admin IDs: {ADMIN_IDS}")
+logger.info(f"002 ADMIN_GROUP_ID  {ADMIN_GROUP_ID}    Admin IDs: {ADMIN_IDS}")
 # Status Constants
 HOMEWORK_STATUS = {
     "PENDING": "pending",
@@ -70,6 +70,7 @@ CONFIG_FILES = {
     "DELAY_MESSAGES": "delay_messages.txt",
 }
 
+
 # Database Settings
 DB_FILE = os.path.join(BASE_DIR, "bot_database.db")
 
@@ -92,7 +93,8 @@ COURSE_TYPES = {
 # Chat Links
 COMMUNITY_CHAT_URL = "https://t.me/+PZM8JZ93eewzZWNi"
 
-# Regular Expressions
+
+#DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")# Regular Expressions
 DELAY_PATTERN = r"_(\d+)(hour|min|m|h)(?:\.|$)"
 
 # Define states as constants

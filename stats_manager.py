@@ -4,14 +4,14 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 from database import DatabaseConnection
 from utils import safe_reply
-from constants import HOMEWORK_STATUS
+from constants import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
 class StatsManager:
-    def __init__(self, admin_ids):
-        self.db = DatabaseConnection()
-        self.admin_ids = admin_ids
+    def __init__(self, db):
+        self.db = db
+        self.admin_ids = ADMIN_IDS
 
     def get_average_homework_time(self, user_id):
         """Calculate average time between homework submission and approval."""

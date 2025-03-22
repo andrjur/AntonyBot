@@ -8,8 +8,8 @@ import random
 logger = logging.getLogger(__name__)
 
 class GalleryManager:
-    def __init__(self):
-        self.db = DatabaseConnection()
+    def __init__(self,db):
+        self.db = db
 
     async def get_gallery_count(self) -> int:
         """Counts the number of approved works in the gallery."""
@@ -91,7 +91,4 @@ class GalleryManager:
         except Exception as e:
             logger.exception(f"Ошибка при получении случайной работы")
             await safe_reply(update, context, "Произошла ошибка при загрузке работы. Попробуйте позже.")
-
-gallery_manager=GalleryManager()
-
 

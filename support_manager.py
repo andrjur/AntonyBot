@@ -4,14 +4,16 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext, ConversationHandler
 from database import DatabaseConnection
 from utils import safe_reply
+from constants import ADMIN_GROUP_ID, ADMIN_IDS
 from constants import ADMIN_GROUP_ID
 
 logger = logging.getLogger(__name__)
 
 class SupportManager:
-    def __init__(self, admin_group_id):
-        self.db = DatabaseConnection()
-        self.admin_group_id = admin_group_id
+    def __init__(self, db):
+        self.db = db
+        self.admin_group_id = ADMIN_GROUP_ID
+        logger.info(f"85 SupportManager: init")
 
     async def show_support(self, update: Update, context: CallbackContext):
         """Shows support menu with options."""
@@ -162,5 +164,4 @@ class SupportManager:
             logger.error(f"Error sending support request to admin: {e}")
             await safe_reply(update, context, "Произошла ошибка при отправке запроса. Попробуйте позже.")
 
-support_manager = SupportManager(ADMIN_GROUP_ID)
 

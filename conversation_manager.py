@@ -10,7 +10,7 @@ from telegram.ext import (
     CallbackContext
 )
 from database import DatabaseConnection
-from utils import safe_reply
+from utils import safe_reply, get_db_and_user, db_handler
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,10 @@ logger = logging.getLogger(__name__)
 ) = range(10)
 
 class ConversationManager:
-    def __init__(self, menu_manager, course_manager, purchase_manager, support_manager, course_data):
+
+    def __init__(self, db, menu_manager, course_manager, purchase_manager, support_manager, course_data):
+        logger.info("15 Initializing ConversationManager")
+        self.db = db
         self.menu_manager = menu_manager
         self.course_manager = course_manager
         self.purchase_manager = purchase_manager
@@ -60,23 +63,11 @@ class ConversationManager:
             allow_reentry=True,
         )
 
-    async def start(self, update: Update, context: CallbackContext):
-        """
-        Обрабатывает команду /start.
-        Инициализирует взаимодействие с пользователем и управляет потоком разговора на основе состояния пользователя.
-        """
-        db = DatabaseConnection()
-        conn = db.get_connection()
-        cursor = db.get_cursor()
-
-        user_id = update.effective_user.id if update.effective_user else None
-        if user_id is None:
-            logger.error("Could not get user ID - effective_user is None")
-            return ConversationHandler.END
-
-        logger.info(
-            f"Начало разговора с пользователем {user_id} ================================================================="
-        )
+    @db_handler
+    async def start(self, update: Update, context: CallbackContext, conn, cursor, user, user_id):
+        """    Обрабатывает команду /start.
+        Инициализирует взаимодействие с пользователем и управляет потоком разговора на основе состояния пользователя.    """
+        logger.info(f"Начало разговора с пользователем {user_id} =================================" )
         logger.info(f"Пользователь {user_id} запустил команду /start")
 
         # Проверка существования пользователя в базе данных
@@ -86,8 +77,13 @@ class ConversationManager:
         )
         user_data = cursor.fetchone()
 
+        if user_data and user_data[0]:  # Если у пользователя есть активный курс
+            logger.info(f"У пользователя {user_id} есть активный курс, показываем главное меню")
+            await update.effective_message.reply_text(f"👋 Привет! ID пользователя: {user_id}")
+            await self.menu_manager.show_main_menu(update, context)
+            return ACTIVE
         # Отправка приветственного сообщения
-        await update.effective_message.reply_text(f"👋 Привет! ID пользователя: {user_id}")
+
 
         if not user_data:
             # Новый пользователь - запрос имени
@@ -122,15 +118,9 @@ class ConversationManager:
         await self.menu_manager.show_main_menu(update, context)
         return ACTIVE
 
-    async def handle_user_info(self, update: Update, context: CallbackContext):
-        db = DatabaseConnection()
-        conn = db.get_connection()
-        cursor = db.get_cursor()
+    @db_handler
+    async def handle_user_info(self, update: Update, context: CallbackContext, conn, cursor, user, user_id):
 
-        user_id = update.effective_user.id if update.effective_user else None
-        if user_id is None:
-            logger.error("Could not get user ID - effective_user is None")
-            return
 
         full_name = update.effective_message.text.strip() if update.effective_message and update.effective_message.text else ""
         logger.info(f" handle_user_info {user_id} ============================================")
@@ -178,7 +168,8 @@ class ConversationManager:
             await update.effective_message.reply_text("Произошла ошибка при сохранении данных. Попробуйте снова.")
             return WAIT_FOR_NAME
 
-    async def handle_code_words(self, update: Update, context: CallbackContext):
+    @db_handler
+    async def handle_code_words(self, update: Update, context: CallbackContext, conn, cursor, user, user_id):
         user_id = update.effective_user.id
         if user_id is None:
             logger.error("Could not get user ID - effective_user is None")
@@ -202,7 +193,8 @@ class ConversationManager:
             await safe_reply(update, context, "Неверное кодовое слово. Пожалуйста, попробуйте снова.")
             return WAIT_FOR_CODE
 
-    async def cancel(self, update: Update, context: CallbackContext):
+    @db_handler
+    async def cancel(self, update: Update, context: CallbackContext, conn, cursor, user, user_id):
         """Handles cancellation of the conversation."""
         user_id = update.effective_user.id if update.effective_user else None
         if user_id is None:

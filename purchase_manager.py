@@ -3,6 +3,8 @@ import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import CallbackContext, ConversationHandler
+
+from constants import ADMIN_GROUP_ID, ADMIN_IDS
 from database import DatabaseConnection
 from utils import safe_reply
 from database import load_tariffs
@@ -10,10 +12,11 @@ from database import load_tariffs
 logger = logging.getLogger(__name__)
 
 class PurchaseManager:
-    def __init__(self, admin_group_id, admin_ids):
-        self.db = DatabaseConnection()
-        self.admin_group_id = admin_group_id
-        self.admin_ids = admin_ids
+    def __init__(self, db):
+        self.db = db
+        logger.info(f"44 Admin PurchaseManager: init")
+        self.admin_group_id = ADMIN_GROUP_ID
+        self.admin_ids = ADMIN_IDS
 
     async def buy_tariff(self, update: Update, context: CallbackContext):
         """Handles tariff purchase process."""

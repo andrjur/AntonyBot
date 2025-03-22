@@ -1,10 +1,13 @@
 # utils.py
 import logging
+import sqlite3
 from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 from telegram.error import TelegramError
 from datetime import date
-import mimetypes # ADD THIS LINE
+from functools import wraps
+from telegram import Update
+import mimetypes
 from database import DatabaseConnection, load_ad_config, load_courses, load_bonuses
 
 logger = logging.getLogger(__name__)
@@ -32,7 +35,89 @@ async def safe_reply(update: Update, context: CallbackContext, text: str,
             await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
 
     except TelegramError as e:
-        logger.error(f"Ошибка при отправке сообщения: {e}")
+        logger.error(f"18 Ошибка телеграмма при отправке сообщения: {e}")
+    except Exception as e:
+        logger.error(f"19 Ошибка при отправке сообщения: {e}")
+
+
+def get_db_and_user(db, update: Update):
+    """ Получает соединение с базой данных, курсор и данные пользователя.
+    Args:  db: Объект DatabaseConnection.
+        update: Объект Update от Telegram.
+    Returns:
+        Tuple[sqlite3.Connection, sqlite3.Cursor, User, int]: Соединение, курсор, пользователь, ID пользователя.
+        Возвращает None, если не удалось получить ID пользователя.
+    """
+    try:
+        conn = db.get_connection()
+        cursor = db.get_cursor()
+        logger.info("334 получили conn  и cursor")
+
+        user = update.effective_user if update.effective_user else None
+        if user is None:
+            logger.error("Could not get user - effective_user is None")
+            return None
+
+        logger.info("335 получили user")
+
+        user_id = user.id
+
+        return conn, cursor, user, user_id
+
+    except Exception as e:
+        logger.error(f"Ошибка при получении соединения с базой данных и данных пользователя: {e}")
+        return None
+
+
+def db_handler(func):
+    """
+    Декоратор для обработки функций, работающих с базой данных.
+
+    Args:
+        func: Функция, которую нужно обернуть.
+
+    Returns:
+        Обернутая функция.
+    """
+
+    @wraps(func)
+    async def wrapper(self, update: Update, context: CallbackContext, *args, **kwargs):
+        """Обертка для обработки соединения с базой данных и ошибок."""
+        db = self  # Получаем объект DatabaseConnection из self
+        result = get_db_and_user(db, update)
+
+        if result is None:
+            await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+            return ConversationHandler.END
+
+        conn, cursor, user, user_id = result
+
+        try:
+            # Вызываем обернутую функцию с соединением, курсором, пользователем и ID пользователя
+            return await func(self, update, context, conn, cursor, user, user_id, *args, **kwargs)
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка в функции {func.__name__}: {e}")  # <----  Используем func.__name__
+            await safe_reply(update, context, "Произошла ошибка при работе с базой данных. Попробуйте позже.")
+            return ConversationHandler.END
+        except Exception as e:
+            logger.error(f"Неизвестная ошибка в функции {func.__name__}: {e}")  # <----  Используем func.__name__
+            await safe_reply(update, context, "Произошла непредвиденная ошибка. Попробуйте позже.")
+            return ConversationHandler.END
+        finally:
+            try:
+                conn.close()
+            except Exception as e:
+                logger.error(f"Ошибка при закрытии соединения с базой данных: {e}")
+
+    return wrapper
+
+
+
+#   @db_handler
+ #   def f(self, update: Update, context: CallbackContext, conn, cursor, user, user_id):
+
+
+
 
 def handle_telegram_errors(func):
     async def wrapper(*args, **kwargs):

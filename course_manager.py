@@ -5,14 +5,14 @@ import random
 import logging
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackContext
+from telegram.ext import CallbackContext, ConversationHandler
 from telegram.constants import ParseMode
 
 from constants import (
     DEFAULT_LESSON_INTERVAL,
     ADMIN_IDS
 )
-from utils import safe_reply, handle_telegram_errors
+from utils import safe_reply, handle_telegram_errors, db_handler
 from lessons import get_lesson_text, get_lesson_files
 from database import load_delay_messages, DELAY_MESSAGES_FILE, DatabaseConnection  # Add this import
 
@@ -97,6 +97,47 @@ class CourseManager:
         except Exception as e:
             logger.error(f"Ошибка при отправке домашнего задания: {e}")
             await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+
+    # Отображает настройки курса *
+    async def show_course_settings(self, update: Update,context: CallbackContext):
+        """Отображает настройки курса."""
+        conn = self.db.get_connection()
+        cursor = self.db.get_cursor()
+        logger.info("388 получили conn  и cursor")
+
+        user = update.effective_user if update.effective_user else None
+        if user is None:
+            logger.error("Could not get user - effective_user is None")
+            return ConversationHandler.END
+
+        logger.info("389 получили user")
+
+        user_id = user.id
+
+        logger.error(f"show_course_settings {user_id}")
+        try:
+            # Получаем времена уведомлений из базы данных
+            cursor.execute(
+                "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
+                (user_id,),
+            )
+            settings = cursor.fetchone()
+            morning_time = settings[0] if settings else "Не установлено"
+            evening_time = settings[1] if settings else "Не установлено"
+
+            # Формируем сообщение с настройками
+            text = (
+                f"Ваши текущие настройки:\n\n"
+                f"⏰ Утреннее напоминание: {morning_time}\n"
+                f"🌙 Вечернее напоминание: {evening_time}\n\n"
+                f"Вы можете изменить эти настройки через соответствующие команды."
+            )
+
+            await safe_reply(update, context, text)
+
+        except Exception as e:
+            logger.error(f"Ошибка при отображении настроек курса для пользователя {user_id}: {e}")
+            await safe_reply(update, context, "Произошла ошибка при загрузке настроек. Попробуйте позже.")
 
     async def handle_course_callback(self, update: Update, context: CallbackContext):
         """
@@ -313,7 +354,8 @@ class CourseManager:
                 text="Произошла ошибка при обработке урока."
             )
 
-    async def send_file(self, file_info, user_id, context):
+    @db_handler
+    async def send_file(self, update: Update, context: CallbackContext, conn, cursor, user, user_id, file_info):
         """Отправляет файл с учетом задержки."""
         file_path = file_info["path"]
         file_type = file_info["type"]
@@ -352,11 +394,10 @@ class CourseManager:
                 text=f"Ошибка при отправке файла: {e}"
             )
 
-    async def handle_homework_approval(self, update: Update, context: CallbackContext):
-        """
-        Обрабатывает подтверждение/отклонение домашнего задания администратором.
-        Ожидаемый формат callback_data: hw_(approve|reject)_<hw_id>
-        """
+    @db_handler
+    async def handle_homework_approval(self, update: Update, context: CallbackContext, conn, cursor, user, user_id):
+        """  Обрабатывает подтверждение/отклонение домашнего задания администратором.
+        Ожидаемый формат callback_data: hw_(approve|reject)_<hw_id> """
         query = update.callback_query
         if not query:
             logger.warning("Callback query is None in handle_homework_approval")
@@ -367,10 +408,6 @@ class CourseManager:
             action, hw_id = data[1], int(data[2])
             new_status = "approved" if action == "approve" else "rejected"
 
-            # Получаем данные о домашнем задании
-            db = context.bot_data['db']
-            cursor = db.get_cursor()
-            conn = db.get_connection()
 
             # Получаем информацию о пользователе и уроке
             cursor.execute("SELECT user_id, lesson FROM homeworks WHERE hw_id = ?", (hw_id,))

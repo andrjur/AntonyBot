@@ -10,8 +10,8 @@ from utils import safe_reply
 logger = logging.getLogger(__name__)
 
 class ReminderManager:
-    def __init__(self):
-        self.db = DatabaseConnection()
+    def __init__(self, db):
+        self.db = db
 
     async def show_reminders(self, update: Update, context: CallbackContext):
         """Shows reminder settings."""

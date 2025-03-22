@@ -95,6 +95,7 @@ Directory Structure:
 ├── menu_manager.py
 ├── micro_util.py
 ├── oldmain.py
+├── oldmain.txt
 ├── passed.png
 ├── payment_info.json
 ├── purchase_manager.py
@@ -286,6 +287,7 @@ CONFIG_FILES = {
     "DELAY_MESSAGES": "delay_messages.txt",
 }
 
+
 # Database Settings
 DB_FILE = os.path.join(BASE_DIR, "bot_database.db")
 
@@ -308,7 +310,8 @@ COURSE_TYPES = {
 # Chat Links
 COMMUNITY_CHAT_URL = "https://t.me/+PZM8JZ93eewzZWNi"
 
-# Regular Expressions
+
+#DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")# Regular Expressions
 DELAY_PATTERN = r"_(\d+)(hour|min|m|h)(?:\.|$)"
 
 # Define states as constants
@@ -379,7 +382,8 @@ logger = logging.getLogger(__name__)
 ) = range(10)
 
 class ConversationManager:
-    def __init__(self, menu_manager, course_manager, purchase_manager, support_manager, course_data):
+    def __init__(self, db, menu_manager, course_manager, purchase_manager, support_manager, course_data):
+        self.db = db
         self.menu_manager = menu_manager
         self.course_manager = course_manager
         self.purchase_manager = purchase_manager
@@ -632,6 +636,7 @@ import os
 import asyncio
 import random
 import logging
+import sqlite3
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
@@ -643,7 +648,7 @@ from constants import (
 )
 from utils import safe_reply, handle_telegram_errors
 from lessons import get_lesson_text, get_lesson_files
-from database import load_delay_messages, DELAY_MESSAGES_FILE  # Add this import
+from database import load_delay_messages, DELAY_MESSAGES_FILE, DatabaseConnection  # Add this import
 
 logger = logging.getLogger(__name__)
 
@@ -664,9 +669,10 @@ class Course:
         return f"Course(id={self.course_id}, name={self.course_name}, type={self.course_type}, code={self.code_word}, price_rub={self.price_rub}, price_tokens={self.price_tokens})"
 
 class CourseManager:
-    def __init__(self):
+    def __init__(self, db):
         self.token_manager = None
         self.stats_manager = None
+        self.db = db
 
     @handle_telegram_errors
     async def handle_homework(self, update: Update, context: CallbackContext):
@@ -726,6 +732,36 @@ class CourseManager:
             logger.error(f"Ошибка при отправке домашнего задания: {e}")
             await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
 
+    # Отображает настройки курса *
+    async def show_course_settings(self, conn: sqlite3.Connection, cursor: sqlite3.Cursor, update: Update,
+                                   context: CallbackContext):
+        """Отображает настройки курса."""
+        user_id = update.effective_user.id
+        logger.error(f"show_course_settings {user_id}")
+        try:
+            # Получаем времена уведомлений из базы данных
+            cursor.execute(
+                "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
+                (user_id,),
+            )
+            settings = cursor.fetchone()
+            morning_time = settings[0] if settings else "Не установлено"
+            evening_time = settings[1] if settings else "Не установлено"
+
+            # Формируем сообщение с настройками
+            text = (
+                f"Ваши текущие настройки:\n\n"
+                f"⏰ Утреннее напоминание: {morning_time}\n"
+                f"🌙 Вечернее напоминание: {evening_time}\n\n"
+                f"Вы можете изменить эти настройки через соответствующие команды."
+            )
+
+            await safe_reply(update, context, text)
+
+        except Exception as e:
+            logger.error(f"Ошибка при отображении настроек курса для пользователя {user_id}: {e}")
+            await safe_reply(update, context, "Произошла ошибка при загрузке настроек. Попробуйте позже.")
+
     async def handle_course_callback(self, update: Update, context: CallbackContext):
         """
         Обрабатывает callback-запросы, связанные с курсами (например, переход к следующему уроку).
@@ -780,16 +816,86 @@ class CourseManager:
         await self.token_manager.add_tokens(target_user_id, amount, "admin_bonus", update, context)
         await safe_reply(update, context, f"Бонус {amount} начислен пользователю {target_user_id}")
 
+    # В course_manager.py
     async def get_current_lesson(self, update: Update, context: CallbackContext):
+        user_id = update.effective_user.id
+        logger.info(f"777 get_current_lesson: user_id={user_id} {context=}")
+        try:
+            # Определяем источник вызова
+            if update.message:  # Если это команда
+                user_id = update.message.from_user.id
+                logger.info(f" 111 update.message.from_user.id={user_id} ")
+                message = update.message
+            elif update.callback_query:  # Если это callback
+                user_id = update.callback_query.from_user.id
+                logger.info(f" 222 update.callback_query.from_user.id={user_id} ")
+                message = update.callback_query.message
+                await update.callback_query.answer()  # Подтверждаем получение callback
+            else:
+                logger.error("555 Неизвестный источник вызова get_current_lesson")
+                return
+
+            # Получаем active_course_id из базы данных
+            cursor = self.db.cursor()
+            cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
+            active_course_data = cursor.fetchone()
+
+            if not active_course_data or not active_course_data[0]:
+                await safe_reply(update, context, "Активируйте курс через кодовое слово.")
+                return
+
+            active_course_id_full = active_course_data[0]
+            active_course_id = active_course_id_full.split("_")[0]
+
+            # Получаем progress (номер урока) из user_courses
+            cursor.execute(
+                "SELECT progress FROM user_courses WHERE user_id = ? AND course_id = ?",
+                (user_id, active_course_id_full),
+            )
+            progress_data = cursor.fetchone()
+            lesson = progress_data[0] if progress_data else 1
+
+            if not progress_data:
+                await safe_reply(update, context, "Начинаем с первого урока.")
+
+            # Отправляем материалы урока
+            await self.process_lesson(user_id, lesson, active_course_id, context)
+
+            # Рассчитываем время следующего урока
+            next_lesson = lesson + 1
+            next_lesson_release_time = datetime.now() + timedelta(hours=DEFAULT_LESSON_INTERVAL)
+            next_lesson_release_str = next_lesson_release_time.strftime("%d-%m-%Y %H:%M:%S")
+
+            await safe_reply(
+                update,
+                context,
+                f"Следующий урок {next_lesson} будет доступен {next_lesson_release_str}.",
+            )
+
+        except Exception as e:
+            logger.error(f"22 Ошибка при получении текущего урока: {e}")
+            await safe_reply(update, context, "Ошибка при получении урока. Попробуйте позже.")
+
+    async def old_get_current_lesson(self, update: Update, context: CallbackContext):
         """Отправляет все материалы текущего урока."""
         user_id = update.effective_user.id
-        logger.info(f"get_current_lesson: user_id={user_id}")
+        logger.info(f"777 get_current_lesson: user_id={user_id} {context=}")
+        logger.info(f"Проверка db: {self.db}")
 
         try:
             # Get active_course_id from users
-            cursor = context.bot_data['db'].cursor()
+            logger.info(f"11 пе")
+            logger.info(f"12 пробуем context.bot_data {context.bot_data}")
+
+            logger.info(f"13 пробуем self.db {self.db=}")
+            cursor = self.db.cursor()
+            logger.info(f"14 зато cursor {cursor=}")
+
+
+            logger.info(f" до запроса {cursor=}")
             cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
             active_course_data = cursor.fetchone()
+            logger.info(f"пока норм: получили длина {len(active_course_data)} сама дата: {active_course_data}")
 
             if not active_course_data or not active_course_data[0]:
                 await safe_reply(update, context, "Активируйте курс через кодовое слово.")
@@ -967,7 +1073,7 @@ class CourseManager:
             await query.answer("Ошибка при обработке запроса. Попробуйте позже.")
             await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
 
-course_manager = CourseManager()
+#course_manager = CourseManager()
 
 
 === File: C:\Mentor\botAntony\database.py ===
@@ -1309,7 +1415,7 @@ def load_tariffs():
 
 
 === File: C:\Mentor\botAntony\directory_structure_and_contents.txt ===
-Файл слишком большой (16898116 байт). Содержимое не считано.
+Файл слишком большой (237830 байт). Содержимое не считано.
 
 
 === File: C:\Mentor\botAntony\file_utils.py ===
@@ -1330,8 +1436,8 @@ import random
 logger = logging.getLogger(__name__)
 
 class GalleryManager:
-    def __init__(self):
-        self.db = DatabaseConnection()
+    def __init__(self,db):
+        self.db = db
 
     async def get_gallery_count(self) -> int:
         """Counts the number of approved works in the gallery."""
@@ -1414,9 +1520,6 @@ class GalleryManager:
             logger.exception(f"Ошибка при получении случайной работы")
             await safe_reply(update, context, "Произошла ошибка при загрузке работы. Попробуйте позже.")
 
-gallery_manager=GalleryManager()
-
-
 
 
 === File: C:\Mentor\botAntony\lessons.py ===
@@ -1497,13 +1600,14 @@ def get_lesson_files(user_id: int, lesson_number: int, course_id: str) -> List[D
 
 === File: C:\Mentor\botAntony\main.py ===
 # main.py
+
 import logging
 import os
 import re
 import time
 from datetime import datetime, timedelta
 import mimetypes
-from typing import Callable
+
 
 # Third-party imports
 from telegram import (
@@ -1523,8 +1627,6 @@ from telegram.ext import (
     ConversationHandler,
     PicklePersistence, ContextTypes
 )
-from telegram.constants import ParseMode
-from telegram.error import TelegramError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
@@ -1564,21 +1666,36 @@ from constants import (
     WAIT_FOR_PHONE_NUMBER
 )
 
+
+# Импортируем модули менеджеров (course_manager, gallery_manager, shop_manager, support_manager)
+import course_manager
+import gallery_manager
+import shop_manager
+import support_manager
+import conversation_manager #  Импортируем conversation_manager
+
 # Manager imports
-from menu_manager import menu_manager
+from menu_manager import MenuManager
 from reminder_manager import ReminderManager
-from shop_manager import shop_manager
-from course_manager import course_manager, Course  # Updated import path
+from shop_manager import ShopManager
+
+from course_manager import CourseManager   #course_manager,
+
+from functools import partial
+
+
 from purchase_manager import PurchaseManager
 from stats_manager import StatsManager
 from token_manager import TokenManager
-from gallery_manager import gallery_manager
-from support_manager import support_manager
+from gallery_manager import GalleryManager
+from support_manager import SupportManager
 from scheduler_manager import SchedulerManager
 from admin_manager import AdminManager
 from conversation_manager import ConversationManager
 from database import load_ad_config, load_course_data, load_delay_messages
 from constants import ADMIN_GROUP_ID, CONFIG_FILES
+
+from constants import DELAY_PATTERN
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -1618,7 +1735,7 @@ persistence = PicklePersistence(filepath="bot_data.pkl")
 
 # Регулярное выражение для извлечения времени задержки из имени файла
 # DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)$") расширение сраное забыли
-DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")
+#DELAY_PATTERN = re.compile(r"_(\d+)(hour|min|m|h)(?:\.|$)")
 
 logger.info(
     f"ПОЕХАЛИ {DEFAULT_LESSON_DELAY_HOURS=} {DEFAULT_LESSON_INTERVAL=} время старта {time.strftime('%d/%m/%Y %H:%M:%S')}")
@@ -1656,7 +1773,9 @@ async def start(update: Update, context: CallbackContext) -> int:
                 logger.info(f"Пользователь {user_id} уже зарегистрирован и курс активирован.")
                 greeting = f"Приветствую, {full_name.split()[0]}! 👋"
                 await safe_reply(update, context, greeting)
-                await menu_manager.show_main_menu(update, context)  # Direct user to main menu
+                logger.info(f"332 из Start вызываю menu ")
+                await context.bot_data['managers']['menu'].show_main_menu(update, context)
+                logger.info(f"333 после menu ")
                 return ACTIVE  # User is fully set up
             else:
                 logger.info(f"Пользователь {user_id} зарегистрирован, но курс не активирован.")
@@ -1704,6 +1823,8 @@ async def button_handler(update: Update, context: CallbackContext):
     stats_manager = managers.get('stats')
     token_manager = managers.get('token')
 
+    logger.info(f"45 button_handler  {course_manager=}")
+
     # Define all button handlers with null checks
     handlers = {
         'menu': menu_manager.show_main_menu if menu_manager else None,
@@ -1728,6 +1849,7 @@ async def button_handler(update: Update, context: CallbackContext):
 
     try:
         if data in handlers and handlers[data]:
+            logger.info(f"46 ща вызовем  {data=} ... и handlers[data]= {handlers[data]}")
             await handlers[data](update, context)
             await query.answer()
             return
@@ -1757,32 +1879,37 @@ async def handle_text_message(update: Update, context: CallbackContext):
     """Handles text messages."""
     user_id = update.effective_user.id
     text = update.message.text.lower()
-    logger.info(f"Handling text message from user {user_id}: {text}")
+    logger.info(f"50 Handling text message from user {user_id}: {text}")
 
     try:
         if context.user_data.get("waiting_for_code"):
-            logger.info("Ignoring message as user is waiting for code.")
+            logger.info("51 Ignoring message as user is waiting for code.")
             return
 
         # Handle specific commands
         if "предварительные" in text or "пм" in text:
-            await course_manager.send_preliminary_material(update, context)
+            await managers['course'].send_preliminary_material(update, context)
             return
 
         if "текущий урок" in text or "ту" in text:
-            await course_manager.get_current_lesson(update, context)
+            logger.info(f"55 main вызов get_current_lesson ")
+            logger.info(f"56 {update=}, {context=} ")
+            await managers['course'].get_current_lesson(update, context)
+
             return
 
         if "галерея дз" in text or "гдз" in text:
-            await gallery_manager.show_gallery(update, context)
+            await context.bot_data['galery']['menu'].show_gallery(update, context)
+
             return
 
         if "тарифы" in text or "ТБ" in text:
-            await shop_manager.show_tariffs(update, context)
+            await context.bot_data['shop'].show_tariffs(update, context)
             return
 
         if "поддержка" in text or "пд" in text:
-            await support_manager.start_support_request(update, context)
+            await context.bot_data['support']['menu'].start_support_request(update, context)
+
             return
 
         # Если это не команда, считаем, что это имя пользователя
@@ -1980,78 +2107,181 @@ async def error_handler(update: Update, context: CallbackContext):
         except Exception as e:
             logger.error(f"Failed to send error message to admin {admin_id}: {e}")
 
-def setup_handlers(application: Application, conv_handler: ConversationHandler, 
-                  menu_manager: menu_manager, reminder_manager: ReminderManager,
-                  shop_manager: support_manager, course_manager: course_manager,
-                  gallery_manager: gallery_manager, support_manager: support_manager) -> None:
-    """Sets up all handlers for the application."""
-    application.add_handler(conv_handler)
 
-    # Menu and info commands
+def register_main_menu_handlers(application: Application, managers: dict):
+    """Регистрация обработчиков кнопок главного меню."""
+    try:
+        application.add_handler(CallbackQueryHandler(
+            managers['course'].get_current_lesson,
+            pattern="^get_current_lesson$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            managers['gallery'].show_gallery,
+            pattern="^gallery$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            managers['shop'].show_tariffs,
+            pattern="^tariffs$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            managers['course'].show_course_settings,
+            pattern="^course_settings$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            managers['stats'].show_statistics,
+            pattern="^statistics$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            managers['support'].start_support_request,
+            pattern="^support$"
+        ))
+    except Exception as e:
+        logger.error(f"Ошибка при регистрации обработчиков главного меню: {e}")
+        raise
+
+def setup_handlers(
+    application: Application,
+    conv_handler: ConversationHandler,
+    menu_manager: MenuManager,
+    reminder_manager: ReminderManager,
+    shop_manager: ShopManager,
+    stats_manager: StatsManager,
+    course_manager: CourseManager,
+    gallery_manager: GalleryManager,
+    support_manager: SupportManager
+) -> None:
+    """
+    Регистрация всех обработчиков для приложения.
+    """
+    try:
+        # 1. Регистрация ConversationHandler
+        application.add_handler(conv_handler)
+
+        # 2. Команды меню и информации
+        register_menu_commands(application, menu_manager)
+
+        # 3. Команды напоминаний
+        register_reminder_commands(application, reminder_manager)
+
+        # 4. Команды курсов
+        register_course_commands(application, course_manager)
+
+        # 5. Команды магазина
+        register_shop_commands(application, shop_manager)
+
+        # 6. Команды галереи
+        register_gallery_commands(application, gallery_manager)
+
+        # 7. Команды поддержки
+        register_support_commands(application, support_manager)
+
+        # 8. Обработчики кнопок главного меню
+        register_main_menu_handlers(application, {
+            'course': course_manager,
+            'gallery': gallery_manager,
+            'shop': shop_manager,
+            'stats': stats_manager,
+            'support': support_manager
+        })
+
+        # 8. Обработчики callback'ов
+        register_callback_handlers(application, course_manager)
+
+        # 9. Дополнительные обработчики
+        register_additional_handlers(application, managers)
+
+    except Exception as e:
+        logger.error(f"Ошибка при регистрации обработчиков: {e}")
+        raise
+
+
+# Вспомогательные функции для регистрации обработчиков
+def register_menu_commands(application: Application, menu_manager: MenuManager):
+    """Регистрация команд меню."""
     application.add_handler(CommandHandler("menu", menu_manager.show_main_menu))
     application.add_handler(CommandHandler("info", menu_manager.info_command))
     application.add_handler(CommandHandler("admins", menu_manager.admins_command))
-    
-    # Reminder commands
+
+    # Регистрация обработчиков кнопок
+    application.add_handler(CallbackQueryHandler(menu_manager.handle_gallery, pattern="^gallery$"))
+    application.add_handler(CallbackQueryHandler(menu_manager.handle_tariffs, pattern="^tariffs$"))
+    application.add_handler(CallbackQueryHandler(menu_manager.handle_course_settings, pattern="^course_settings$"))
+    application.add_handler(CallbackQueryHandler(menu_manager.handle_statistics, pattern="^statistics$"))
+    application.add_handler(CallbackQueryHandler(menu_manager.handle_support, pattern="^support$"))
+
+
+def register_reminder_commands(application: Application, reminder_manager: ReminderManager):
+    """Регистрация команд напоминаний."""
     application.add_handler(CommandHandler("reminders", reminder_manager.show_reminders))
-    application.add_handler(CommandHandler("set_morning", lambda update, context: 
+    application.add_handler(CommandHandler("set_morning", lambda update, context:
         reminder_manager.set_reminder(update, context, "morning")))
-    application.add_handler(CommandHandler("set_evening", lambda update, context: 
+    application.add_handler(CommandHandler("set_evening", lambda update, context:
         reminder_manager.set_reminder(update, context, "evening")))
     application.add_handler(CommandHandler("disable_reminders", reminder_manager.disable_reminders))
-    
-    # Course commands
+
+
+def register_course_commands(application: Application, course_manager: CourseManager):
+    """Регистрация команд курсов."""
     application.add_handler(CommandHandler("course", course_manager.course_management))
     application.add_handler(CommandHandler("lesson", course_manager.get_current_lesson))
     application.add_handler(MessageHandler(
-        filters.PHOTO | filters.Document.ALL, 
+        filters.PHOTO | filters.Document.ALL,
         course_manager.handle_homework
     ))
-    
-    # Shop commands
+    application.add_handler(CallbackQueryHandler(course_manager.get_current_lesson, pattern="^get_current_lesson$"))
+
+
+def register_shop_commands(application: Application, shop_manager: ShopManager):
+    """Регистрация команд магазина."""
     application.add_handler(CommandHandler("tariffs", shop_manager.show_tariffs))
     application.add_handler(CommandHandler("buy", shop_manager.handle_buy_tariff))
-    
-    # Gallery commands
+
+
+def register_gallery_commands(application: Application, gallery_manager: GalleryManager):
+    """Регистрация команд галереи."""
     application.add_handler(CommandHandler("gallery", gallery_manager.show_gallery))
-    
-    # Support commands
+
+
+def register_support_commands(application: Application, support_manager: SupportManager):
+    """Регистрация команд поддержки."""
     application.add_handler(CommandHandler("support", support_manager.start_support_request))
-    
-    # Course-related callbacks
+
+
+def register_callback_handlers(application: Application, course_manager: CourseManager):
+    """Регистрация callback-обработчиков."""
     application.add_handler(CallbackQueryHandler(
-        course_manager.handle_course_callback, 
+        course_manager.handle_course_callback,
         pattern="^(change_tariff|my_courses|hw_history)$"
     ))
-
-    # Add homework approval handlers
     application.add_handler(CallbackQueryHandler(
         course_manager.handle_homework_approval,
         pattern='^hw_(approve|reject)_\d+'
     ))
 
-    # Add admin comment handler
+
+def register_additional_handlers(application: Application, managers: dict):
+    """Регистрация дополнительных обработчиков."""
     application.add_handler(MessageHandler(
         filters.TEXT & filters.ChatType.PRIVATE & filters.User(ADMIN_IDS),
         managers['admin'].save_admin_comment
     ))
-    
-    # Other callback queries
     application.add_handler(CallbackQueryHandler(button_handler))
-
-
-
-
 
 def main():
     global managers
 
     try:
+        # Initialize application and scheduler
+        application = ApplicationBuilder().token(TOKEN).persistence(persistence).build()
+        scheduler = AsyncIOScheduler()
+
         # Initialize database
         db = DatabaseConnection()
-        logger.info("1 перед create_all_tables()")
+        application.bot_data['db'] = db  # Добавляем db в bot_data
+
+        logger.info(f"1 перед create_all_tables() db = {db}.")
         create_all_tables()
-        logger.info("Database initialized successfully.")
+        logger.info("БД жива")
 
         # Загрузка конфигураций
         courses = load_courses()
@@ -2064,27 +2294,26 @@ def main():
         if TOKEN is None:
             logger.error("Bot token not found. Please set the TOKEN environment variable.")
 
-        # Initialize application and scheduler
-        application = ApplicationBuilder().token(TOKEN).persistence(persistence).build()
-        scheduler = AsyncIOScheduler()
 
-        # Initialize managers
+
+        logger.info(f"3 создали приложение ")
+
+        # Инициализация менеджеров через объекты
         managers = {
-            'menu': menu_manager,
-            'reminder': ReminderManager(),
-            'shop': shop_manager,
-            'course': course_manager,
-            'purchase': PurchaseManager(
-                admin_group_id=ADMIN_GROUP_ID,
-                admin_ids=ADMIN_IDS
-            ),
-            'stats': StatsManager(ADMIN_IDS),
-            'token': TokenManager(ADMIN_IDS),
-            'gallery': gallery_manager,
-            'support': support_manager,
-            'scheduler': SchedulerManager(),
-            'admin': AdminManager(ADMIN_IDS)  # Add AdminManager
+            'menu': MenuManager(db),
+            'reminder': ReminderManager(db),
+            'shop': ShopManager(db),
+            'course': CourseManager(db),
+            'purchase': PurchaseManager(db),
+            'stats': StatsManager(db),
+            'token': TokenManager(db),
+            'gallery': GalleryManager(db),
+            'support': SupportManager(db),
+            'scheduler': SchedulerManager(db),
+            'admin': AdminManager(db)
         }
+        logger.info(f" 4 Managers initialized: {managers}")
+
 
         # Set up manager dependencies
         application.bot_data['managers'] = managers
@@ -2093,16 +2322,20 @@ def main():
         managers['course'].token_manager = managers['token']
         managers['course'].stats_manager = managers['stats']
 
+        logger.info(f" 5 conversation_manager initialized")
+
         # Create conversation manager and handler
         conversation_manager = ConversationManager(
+            db,
             managers['menu'],
             managers['course'],
             managers['purchase'],
             managers['support'],
-            course_data
+            CONFIG_FILES["COURSES"]
         )
         conv_handler = conversation_manager.create_conversation_handler()
 
+        logger.info(f" 6 conv")
         # # Set up remaining handlers
         # application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
         # application.add_error_handler(error_handler)
@@ -2117,23 +2350,36 @@ def main():
             },
             fallbacks=[CommandHandler('cancel', unknown_command)]
         )
+
+        logger.info(f" 7 before app   ")
         application.add_handler(conv_handler)
         # Set up remaining handlers
         application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+
+        logger.info(f" 8 add    add ")
+
         application.add_handler(CallbackQueryHandler(button_handler))
 
-        # # Set up all handlers
-        # setup_handlers(
-        #     application,
-        #     conv_handler,
-        #     managers['menu'],
-        #     managers['reminder'],
-        #     managers['shop'],
-        #     managers['course'],
-        #     managers['gallery'],
-        #     managers['support']
-        # )
+
+
+        # Set up all handlers
+        setup_handlers(
+            application,
+            conv_handler,
+            managers['menu'],
+            managers['reminder'],
+            managers['shop'],
+            managers['stats'],
+            managers['course'],
+            managers['gallery'],
+            managers['support']
+        )
+
+        logger.info(f" 9 после setup_handlers   ")
+
         application.add_error_handler(error_handler)
+
+        logger.info(f"15 внизу мэина ")
 
         # Set up job queue
         job_queue = application.job_queue
@@ -2152,7 +2398,7 @@ def main():
         application.run_polling()
 
     except Exception as e:
-        logger.error(f"Critical error in main: {e}")
+        logger.critical(f"Critical error in main: {e}")
 
     finally:
         db.close()
@@ -2171,31 +2417,484 @@ if __name__ == "__main__":
 
 === File: C:\Mentor\botAntony\menu_manager.py ===
 #menu_manager.py
+import json
 import logging
+import mimetypes
+import os
+import sqlite3
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackContext
+from telegram.error import TelegramError
+from telegram.ext import CallbackContext, ConversationHandler
 from database import DatabaseConnection
 from utils import safe_reply
-from constants import ADMIN_IDS
+from constants import ADMIN_IDS, DELAY_PATTERN
+from datetime import date, datetime, time
+from constants import CONFIG_FILES
  
 logger = logging.getLogger(__name__)
 
 class MenuManager:
-    def __init__(self):
-        self.db = DatabaseConnection()
+    def __init__(self, db):
+        self.db = db
+
+    def load_bonuses(self):
+        """Загружает настройки бонусов из файла."""
+        try:
+            BONUSES_FILE = CONFIG_FILES["BONUSES"]
+            with open(BONUSES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            logger.error(f"Файл {BONUSES_FILE} не найден. Используются значения по умолчанию.")
+            return {
+                "monthly_bonus": 1,
+                "birthday_bonus": 5,
+                "referral_bonus": 2,
+                "bonus_check_interval": 86400,  # 24 hours
+            }
+        except json.JSONDecodeError:
+            logger.error(f"Ошибка при чтении JSON из файла {BONUSES_FILE}. Используются значения по умолчанию.")
+            return {
+                "monthly_bonus": 1,
+                "birthday_bonus": 5,
+                "referral_bonus": 2,
+                "bonus_check_interval": 86400,  # 24 hours
+            }
+
+    def get_last_bonus_date(self, cursor: sqlite3.Cursor, user_id: int) -> date or None:
+        """Получает дату последнего начисления ежемесячного бонуса."""
+        cursor.execute(
+            """
+            SELECT last_bonus_date FROM users WHERE user_id = ?
+        """,
+            (user_id,),
+        )
+        result = cursor.fetchone()
+        last_bonus_date_str = result[0] if result else None
+        if last_bonus_date_str:
+            return datetime.strptime(last_bonus_date_str, "%Y-%m-%d").date()
+        return None
+
+    async def get_next_bonus_info(self, conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int) -> dict:
+        """Получает информацию о следующем и последнем начислении бонусов."""
+        bonuses_config = MenuManager.load_bonuses(self)
+        today = date.today()
+
+        # 1. Monthly bonus
+        last_bonus_date = MenuManager.get_last_bonus_date(self, cursor, user_id)
+        if not last_bonus_date or (
+                last_bonus_date.year != today.year or last_bonus_date.month != today.month
+        ):
+            next_bonus = f"+{bonuses_config.get('monthly_bonus', 1)} (Ежемесячный бонус)"
+        else:
+            next_bonus = "Ежемесячный бонус уже начислен в этом месяце"
+
+        # 2. Birthday bonus
+        cursor.execute("SELECT birthday FROM users WHERE user_id = ?", (user_id,))
+        user_data = cursor.fetchone()
+        birthday_str = user_data[0] if user_data else None
+        if birthday_str:
+            birthday = datetime.strptime(birthday_str, "%Y-%m-%d").date()
+            if birthday.month == today.month and birthday.day == today.day:
+                next_bonus += f"\n+{bonuses_config.get('birthday_bonus', 5)} (Бонус на день рождения)"
+            else:
+                next_bonus += f"\nБонус на день рождения будет начислен {birthday_str}"
+
+        return {"last_bonus": "За регистрацию", "next_bonus": next_bonus}  # Пример
+
+    async def get_available_products(self, conn: sqlite3.Connection, cursor: sqlite3.Cursor, tokens: int) -> str:
+        """Возвращает информацию о доступных продуктах в магазине."""
+        #  Здесь надо подгрузить товары из бд
+        # 1. Make a database query
+        cursor.execute("SELECT product_name, price FROM products")  # WHERE price <= ? ORDER BY price ASC
+        logger.info(f"  get_available_products  Начало выполнения функции с tokens={tokens}")  # Добавлено логирование
+        products = cursor.fetchall()
+        if not products:
+            return "\nВ магазине пока нет товаров."
+
+        logger.info(f" get_available_products  Найдено {len(products)} товаров.")  # Добавлено логирование
+        # 2. Find the cheapest product
+        affordable_products = []
+        unaffordable_products = []
+        for product in products:
+            if product[1] <= tokens:
+                affordable_products.append(product)
+            else:
+                unaffordable_products.append(product)
+        if not affordable_products:
+            return "\nУ вас недостаточно средств для покупки каких-либо товаров."
+        # 3. Suggest Products
+        products_str = ""
+        if affordable_products:
+            products_str += f"\nВы можете купить:\n"
+            for product in affordable_products:
+                products_str += f"- {product[0]} (Цена: {product[1]})\n"
+        products_str = products_str[:-1] if products_str else products_str
+        if unaffordable_products:
+            products_str += f"\nВам немного не хватает для:\n"
+            for product in unaffordable_products:
+                if product[1] - tokens <= 10:
+                    products_str += f"- {product[0]} (Цена: {product[1]})\n"
+        products_str = products_str[:-1] if products_str else products_str
+        return products_str
+
+    # домашка ???
+    async def get_homework_status_text(self, conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id, course_id):
+        """Возвращает текст статуса проверки домашнего задания."""
+        # Проверяем статус домашнего задания
+        cursor.execute(
+            """
+            SELECT hw_id, lesson, status
+            FROM homeworks
+            WHERE user_id = ? AND course_id = ?
+            ORDER BY lesson DESC LIMIT 1
+        """,
+            (user_id, course_id),
+        )
+        homework_data = cursor.fetchone()
+
+        if not homework_data:
+            # Если домашки еще не отправлялись
+            cursor.execute(
+                """
+                SELECT progress
+                FROM user_courses
+                WHERE user_id = ? AND course_id = ?
+            """,
+                (user_id, course_id),
+            )
+            progress_data = cursor.fetchone()
+            if progress_data:
+                lesson = progress_data[0]
+                return f"Жду домашку к {lesson} уроку"
+            else:
+                return "Информация о прогрессе недоступна"
+
+        hw_id, lesson, status = homework_data
+
+        # Формируем текст в зависимости от статуса
+        if status == "pending":
+            return f"Домашка к {lesson} уроку на самопроверке"
+        elif status == "approved":
+            return f"Домашка к {lesson} уроку принята"
+        else:
+            return "Статус домашки неизвестен странен и загадочен"
+
+    # Функция для получения файлов урока ============== не оптимизировали safe
+    def get_lesson_files(self, user_id, lesson_number, course_id):
+        """Извлекает список файлов урока."""
+        files = []
+        directory = f"courses/{course_id}"  # Укажите правильный путь к директории с файлами
+        logger.info(f"get_lesson_files {directory}")
+        try:
+            logger.info(f"внутри трая считываем всё из {os.listdir(directory)}")
+            for filename in os.listdir(directory):
+                # logger.info(f"for  {filename=}")
+                if filename.startswith(f"lesson{lesson_number}_") and not filename.endswith(
+                        ".html") and not filename.endswith(".txt") and not filename.endswith(".md"):
+                    file_path = os.path.join(directory, filename)
+                    mime_type, _ = mimetypes.guess_type(file_path)
+                    file_type = "document"  # Тип по умолчанию
+                    delay = 0  # Задержка по умолчанию
+
+                    # Проверка типа файла на основе MIME-типа
+                    if mime_type and mime_type.startswith('image'):
+                        file_type = "photo"
+                    elif mime_type and mime_type.startswith('video'):
+                        file_type = "video"
+                    elif mime_type and mime_type.startswith('audio'):
+                        file_type = "audio"
+
+                    # Извлечение информации о задержке из имени файла
+                    match = DELAY_PATTERN.search(filename)
+                    if match:
+                        delay_value, delay_unit = match.groups()
+                        delay_value = int(delay_value)
+
+                        if delay_unit in ["min", "m"]:
+                            delay = delay_value * 60  # Convert minutes to seconds
+                        elif delay_unit in ["hour", "h"]:
+                            delay = delay_value * 3600  # Convert hours to seconds
+                        else:
+                            delay = delay_value  # Default seconds
+
+                    files.append({"path": file_path, "type": file_type, "delay": delay})
+                    # logger.info(f"for  len (files)={len(files)}===========")
+
+        except FileNotFoundError:
+            logger.error(f"Directory not found: {directory}")
+            return []
+        except Exception as e:
+            logger.error(f"Error reading lesson files: {e}")
+            return []
+
+        logger.info(f"  get_lesson_files {user_id=} - lesson_number={lesson_number}")
+        return files
+
+    # Функция для получения предварительных материалов строго ненадо  conn: sqlite3.Connection, cursor: sqlite3.Cursor,
+    def get_preliminary_materials(self, course_id, lesson):
+        """
+        Возвращает список всех предварительных материалов для урока.
+        """
+        lesson_dir = f"courses/{course_id}/"
+        materials = []
+        logger.info(f" get_preliminary_materials {lesson_dir} ")
+        for filename in os.listdir(lesson_dir):
+            if filename.startswith(f"lesson{lesson}_p") and os.path.isfile(os.path.join(lesson_dir, filename)):
+                materials.append(filename)
+        materials.sort()  # Сортируем по порядку (p1, p2, ...)
+        return materials
 
     async def show_main_menu(self, update: Update, context: CallbackContext):
-        """Shows the main menu."""
-        keyboard = [
-            [InlineKeyboardButton("📚 Текущий урок", callback_data="get_current_lesson")],
-            [InlineKeyboardButton("🖼 Галерея работ", callback_data="gallery")],
-            [InlineKeyboardButton("💰 Тарифы", callback_data="tariffs")],
-            [InlineKeyboardButton("⚙️ Настройки курса", callback_data="course_settings")],
-            [InlineKeyboardButton("📊 Статистика", callback_data="statistics")],
-            [InlineKeyboardButton("❓ Поддержка", callback_data="support")],
-        ]
+        """  Отображает главное меню с кнопками.   """
+        user = update.effective_user
+        user_id = user.id
+        logger.info("355 Showing main menu. {user_id}")
+
+        conn = self.db.get_connection()
+        cursor = self.db.get_cursor()
+
+        # 1. Получаем количество токенов пользователя
+        cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
+        tokens_data = cursor.fetchone()
+        tokens = tokens_data[0] if tokens_data else 0
+
+        # 2. Получаем информацию о следующем бонусе
+        next_bonus_info = await MenuManager.get_next_bonus_info(self.conn, cursor, user_id)
+
+        # 3. Формируем сообщение
+        # Преобразуем токены в монеты
+        bronze_coins = tokens % 10  # 1 BRONZE_COIN = 1 токен
+        tokens //= 10  # остались десятки
+        silver_coins = tokens % 10  # 1 SILVER_COIN = 10 токенов
+        tokens //= 10  # остались сотки
+        gold_coins = tokens % 10  # 1 GOLD_COIN = 100 токенов
+        tokens //= 10  # остались тыщи
+        platinum_coins = tokens  # 1 GEM_COIN = 1000 токенов
+
+        # Coin emojis
+        BRONZE_COIN = "🟤"  # Bronze coin
+        SILVER_COIN = "⚪️"  # Silver coin
+        GOLD_COIN = "🟡"  # Gold coin
+        PLATINUM_COIN = "💎"  # Platinum Coin
+
+        # Формируем строку с монетами
+        coins_display = (
+            f"{PLATINUM_COIN}x{platinum_coins}"
+            f"{GOLD_COIN}x{gold_coins}"
+            f"{SILVER_COIN}x{silver_coins}"
+            f"{BRONZE_COIN}x{bronze_coins}"
+        )
+        tokens = tokens_data[0] if tokens_data else 0  # просто считали заново
+
+        message = f"Ваши antCoins: {tokens}   {coins_display}\n"
+        message += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
+        message += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
+
+        # 4. Получаем доступные товары для покупки
+        products_message = await MenuManager.get_available_products(self, conn, cursor, tokens)
+        message += products_message
+        try:
+            # Get data of course
+            cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user.id,))
+            active_course_data = cursor.fetchone()
+            logger.info(f" active_course_data= {active_course_data} ---- ")
+            if not active_course_data or not active_course_data[0]:
+                message_text = "Активируйте курс с помощью кодового слова."
+                await safe_reply(update, context, message_text)
+                return ConversationHandler.END
+
+            active_course_id_full = active_course_data[0]
+            # Short name
+            active_course_id = active_course_id_full.split("_")[0]
+            active_tariff = active_course_id_full.split("_")[1] if len(
+                active_course_id_full.split("_")) > 1 else "default"
+
+            # Получаем данные о типе курса и прогрессе
+            cursor.execute(
+                """
+                SELECT course_type, progress
+                FROM user_courses
+                WHERE user_id = ? AND course_id = ?
+            """,
+                (user.id, active_course_id_full),
+            )
+            course_data = cursor.fetchone()
+            logger.info(f" course_data= {course_data} ----- ")
+
+            if not course_data:
+                logger.warning(f"Не найден course_type для user_id={user.id} и course_id={active_course_id_full}")
+                course_type, progress = "unknown", 0  # Установите значения по умолчанию
+            else:
+                course_type, progress = course_data
+
+            logger.info(f" Тип курса: {course_type=} Прогресс: {progress=} ------ ")
+
+            logger.info(f" {course_type=} {progress=} ------ ")
+
+            # Notifications
+            cursor.execute(
+                "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
+                (user.id,),
+            )
+            settings = cursor.fetchone()
+
+            logger.info(f"Настройки уведомлений:  {settings=}  ------- ")
+            morning_time = settings[0] if settings and len(settings) > 0 else "Not set"  # CHECK LENGHT
+            evening_time = settings[1] if settings and len(settings) > 1 else "Not set"  # CHECK LENGHT
+
+            # Получаем имя пользователя
+            cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user.id,))
+            name_data = cursor.fetchone()
+            logger.info(f" Имя пользователя:  {name_data=}  -------- ")
+
+            logger.info(f" {settings=}  ------- ")
+            morning_time = settings[0] if settings and len(settings) > 0 else "Not set"  # CHECK LENGHT
+            evening_time = settings[1] if settings and len(settings) > 1 else "Not set"  # CHECK LENGHT
+
+            # Get username
+            cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user.id,))
+            name_data = cursor.fetchone()
+            logger.info(f" {name_data=}  -------- ")
+
+            if name_data and len(name_data) > 0:
+                full_name = name_data[0]
+            else:
+                full_name = "Пользователь"
+                logger.warning(f"Не найдено имя пользователя {user.id} в базе данных")
+            logger.info(f" {full_name=}  --------- ")
+
+            # Получаем статус домашнего задания
+            homework = await MenuManager.get_homework_status_text(self, conn, cursor, user.id, active_course_id_full)
+
+            logger.info(f" {homework=}  --------- ")
+
+            lesson_files = MenuManager.get_lesson_files(self, user.id, progress, active_course_id)
+            logger.info(f" {lesson_files=}  --------- ")
+
+            # Removing this as it should happen only on "lesson" button press
+            # last_lesson = await check_last_lesson(conn, cursor, update, context)
+            # logger.info(f" {last_lesson=}  --------- ")
+
+            # Debug state
+            if context.user_data and context.user_data.get("waiting_for_code"):
+                state_emoji = "🔑"  # Key emoji for 'waiting_for_code' state
+            else:
+                state_emoji = "✅"  # Checkmark for other states
+
+            progress_text = f"Текущий урок: {progress}" if progress else "--"
+            greeting = f"""Приветствую, {full_name.split()[0]}! {state_emoji}
+                Курс: {active_course_id} ({course_type}) {active_tariff}
+                Прогресс: {progress_text}
+                Домашка: {homework}     Для СамоОдобрения введи потом  /self_approve_{progress}"""
+
+
+            # Make buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("📚 Текущий Урок - повтори всё", callback_data="get_current_lesson"),
+                    InlineKeyboardButton("🖼 Галерея ДЗ", callback_data="gallery"),
+                ],
+                [
+                    InlineKeyboardButton(
+                        f"⚙ Настройка Курса ⏰({morning_time}, {evening_time})",
+                        callback_data="course_settings",
+                    )
+                ],
+                [
+                    InlineKeyboardButton("💰 Тарифы и Бонусы <- тут много", callback_data="tariffs"),
+                ],
+                [InlineKeyboardButton("🙋 ПоДдержка", callback_data="support")],
+            ]
+
+            # ADD DYNAMIC BUTTON для предварительных материалов
+            # Find lesson
+            next_lesson = progress + 1
+
+            # If lesson available add it
+            lessons = MenuManager.get_preliminary_materials(self, active_course_id, next_lesson)
+            if len(lessons) > 0 and not (homework.startswith("есть")):
+                keyboard.insert(
+                    0,
+                    [
+                        InlineKeyboardButton(
+                            "🙇🏼Предварительные материалы к след. уроку",
+                            callback_data="preliminary_tasks",
+                        )
+                    ],
+                )
+
+            # Кнопка самоодобрения для тарифа self_check
+            if active_tariff == "self_check":
+                keyboard.insert(
+                    0,
+                    [
+                        InlineKeyboardButton(
+                            "✅ Самоодобрение ДЗ",
+                            callback_data=f"self_approve_{progress}"
+                        )
+                    ],
+                )
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            logger.info(f" pre #Send menu  ---------- ")
+            # Send menu
+            try:
+                await safe_reply(update, context, greeting, reply_markup=reply_markup)
+            except TelegramError as e:
+                logger.error(f"Telegram API error: {e}")
+                await context.bot.send_message(user.id, "Произошла ошибка. Попробуйте позже.")
+
+        except Exception as e:
+            logger.error(f"time {time.strftime('%H:%M:%S')} Error in show_main_menu: {str(e)}")
+            await safe_reply(update, context, "Error display menu. Try later.")
+            return ConversationHandler.END
+
+
         reply_markup = InlineKeyboardMarkup(keyboard)
         await safe_reply(update, context, "Главное меню:", reply_markup=reply_markup)
+
+    async def handle_gallery(self, update: Update, context: CallbackContext):
+        """
+        Обработчик кнопки 'Галерея работ'.
+        """
+        query = update.callback_query
+        await query.answer()  # Подтверждаем получение callback
+        await safe_reply(update, context, "Здесь будет галерея работ.")
+
+    async def handle_tariffs(self, update: Update, context: CallbackContext):
+        """
+        Обработчик кнопки 'Тарифы'.
+        """
+        query = update.callback_query
+        await query.answer()
+        await safe_reply(update, context, "Здесь будет информация о тарифах.")
+
+    async def handle_course_settings(self, update: Update, context: CallbackContext):
+        """
+        Обработчик кнопки 'Настройки курса'.
+        """
+        query = update.callback_query
+        await query.answer()
+        await safe_reply(update, context, "Здесь будут настройки курса.")
+
+    async def handle_statistics(self, update: Update, context: CallbackContext):
+        """
+        Обработчик кнопки 'Статистика'.
+        """
+        query = update.callback_query
+        await query.answer()
+        await safe_reply(update, context, "Здесь будет статистика обучения.")
+
+    async def handle_support(self, update: Update, context: CallbackContext):
+        """
+        Обработчик кнопки 'Поддержка'.
+        """
+        query = update.callback_query
+        await query.answer()
+        await safe_reply(update, context, "Если у вас есть вопросы, свяжитесь с поддержкой.")
+
 
     async def info_command(self, update: Update, context: CallbackContext):
         """Shows bot information."""
@@ -2207,8 +2906,19 @@ class MenuManager:
         await safe_reply(update, context, info_text)
 
     async def admins_command(self, update: Update, context: CallbackContext):
-        """Shows admin contact information."""
-        admin_text = "👨‍💼 Контакты администраторов:\n@admin1\n@admin2"
+        """
+        Команда /admins — показывает контакты администраторов.
+        """
+        logger.info(f"Отображение списка администраторов: {ADMIN_IDS}")
+
+        if not ADMIN_IDS:
+            await safe_reply(update, context, "Список администраторов пуст.")
+            return
+
+        admin_text = "👨‍💼 Контакты администраторов:\n"
+        for admin_id in ADMIN_IDS:
+            admin_text += f"@{admin_id}\n"
+
         await safe_reply(update, context, admin_text)
 
     async def reminders(self, update: Update, context: CallbackContext):
@@ -2427,8 +3137,7 @@ class MenuManager:
             logger.error(f"Error sending homework feedback: {e}")
             await safe_reply(update, context, "Произошла ошибка при отправке комментария.")
 
-# Create a single instance to be used throughout the application
-menu_manager = MenuManager()
+
 
 === File: C:\Mentor\botAntony\micro_util.py ===
 import os
@@ -2573,6 +3282,10 @@ if __name__ == "__main__":
 Файл слишком большой (260444 байт). Содержимое не считано.
 
 
+=== File: C:\Mentor\botAntony\oldmain.txt ===
+Файл слишком большой (260444 байт). Содержимое не считано.
+
+
 === File: C:\Mentor\botAntony\payment_info.json ===
 {
   "phone_number": "+79525515554",
@@ -2587,6 +3300,8 @@ import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import CallbackContext, ConversationHandler
+
+from constants import ADMIN_GROUP_ID, ADMIN_IDS
 from database import DatabaseConnection
 from utils import safe_reply
 from database import load_tariffs
@@ -2594,10 +3309,11 @@ from database import load_tariffs
 logger = logging.getLogger(__name__)
 
 class PurchaseManager:
-    def __init__(self, admin_group_id, admin_ids):
-        self.db = DatabaseConnection()
-        self.admin_group_id = admin_group_id
-        self.admin_ids = admin_ids
+    def __init__(self, db):
+        self.db = db
+        logger.info(f"44 Admin PurchaseManager: init")
+        self.admin_group_id = ADMIN_GROUP_ID
+        self.admin_ids = ADMIN_IDS
 
     async def buy_tariff(self, update: Update, context: CallbackContext):
         """Handles tariff purchase process."""
@@ -2964,8 +3680,8 @@ from utils import safe_reply
 logger = logging.getLogger(__name__)
 
 class ReminderManager:
-    def __init__(self):
-        self.db = DatabaseConnection()
+    def __init__(self, db):
+        self.db = db
 
     async def show_reminders(self, update: Update, context: CallbackContext):
         """Shows reminder settings."""
@@ -3058,6 +3774,9 @@ Error reading file: 'utf-8' codec can't decode byte 0xff in position 0: invalid 
 
 === File: C:\Mentor\botAntony\scheduler_manager.py ===
 import logging
+import sqlite3
+
+from course_manager import CourseManager
 from database import DatabaseConnection
 from telegram.ext import CallbackContext
 from datetime import datetime
@@ -3066,14 +3785,60 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 logger = logging.getLogger(__name__)
 
 class SchedulerManager:
-    def __init__(self):
-        self.db = DatabaseConnection()
+    def __init__(self, db):
+        self.db = db
+
+    #  Qwen 15  Замена send_lesson_by_timer
+    async def send_lesson_by_timer(self, conn: sqlite3.Connection, cursor: sqlite3.Cursor, user_id: int,
+                                   context: CallbackContext):
+        """Send lesson to users by timer."""
+        logger.info(f"Sending lesson to user {user_id} at {datetime.now()}")
+
+        # Get active_course_id and progress
+        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
+        active_course_data = cursor.fetchone()
+
+        if not active_course_data or not active_course_data[0]:
+            await context.bot.send_message(chat_id=user_id, text="Пожалуйста, активируйте курс.")
+            return
+
+        active_course_id_full = active_course_data[0]
+        cursor.execute(
+            """
+            SELECT progress
+            FROM user_courses
+            WHERE user_id = ? AND course_id = ?
+        """,
+            (user_id, active_course_id_full),
+        )
+        progress_data = cursor.fetchone()
+
+        if not progress_data:
+            await context.bot.send_message(chat_id=user_id, text="Не найден прогресс курса.")
+            return
+
+        lesson = progress_data[0]
+
+        # Update lesson_sent_time in the database
+        lesson_sent_time = datetime.now()
+        cursor.execute(
+            """
+            INSERT INTO homeworks (user_id, course_id, lesson, lesson_sent_time)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, course_id, lesson) DO UPDATE SET lesson_sent_time = excluded.lesson_sent_time
+        """,
+            (user_id, active_course_id_full, lesson, lesson_sent_time),
+        )
+        conn.commit()
+
+        # Process the lesson
+        await CourseManager.process_lesson(self, user_id, lesson, active_course_id_full.split("_")[0], context)
 
     def add_user_to_scheduler(self, user_id: int, time2: datetime, context: CallbackContext, scheduler):
         """Add user to send_lesson_by_timer with specific time."""
         try:
             scheduler.add_job(
-                send_lesson_by_timer,
+                SchedulerManager.send_lesson_by_timer,
                 trigger="cron",
                 hour=time2.hour,
                 minute=time2.minute,
@@ -3103,13 +3868,14 @@ from database import load_bonuses, load_payment_info
 logger = logging.getLogger(__name__)
 
 class ShopManager:
-    def __init__(self, admin_group_id, tariffs_file, payment_info_file):
-        self.admin_group_id = admin_group_id
-        self.tariffs_file = tariffs_file
-        self.payment_info_file = payment_info_file
+    def __init__(self, db):
+        self.db = db
+        self.admin_group_id = ADMIN_GROUP_ID
         self.db = DatabaseConnection()
-        self.token_manager = None  # Add this line
-        self.init_lootboxes()  # Add this line
+        self.token_manager = None  #
+        self.init_lootboxes()
+        self.tariffs_file = CONFIG_FILES["TARIFFS"]
+        self.payment_info_file = CONFIG_FILES["PAYMENT_INFO"]
     
     def init_lootboxes(self):
         """Initialize lootboxes in the database."""
@@ -3133,8 +3899,6 @@ class ShopManager:
             logger.error(f"Ошибка при инициализации таблицы lootboxes: {e}")
         self.db = DatabaseConnection()
         self.admin_group_id = ADMIN_GROUP_ID
-        self.tariffs_file = tariffs_file
-        self.payment_info_file = payment_info_file
         self.bonuses = load_bonuses()  # Add this line
 
     async def apply_bonuses(self, user_id: int, price: float) -> float:
@@ -3524,9 +4288,8 @@ class ShopManager:
             return "Предмет добавлен в ваш инвентарь!"
         return "Неизвестная награда"
 
-tariffs_file=CONFIG_FILES["TARIFFS"]
-payment_info_file=CONFIG_FILES["PAYMENT_INFO"]
-shop_manager = ShopManager( ADMIN_GROUP_ID, tariffs_file, payment_info_file)
+
+
 
 
 === File: C:\Mentor\botAntony\stats_manager.py ===
@@ -3536,14 +4299,14 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
 from database import DatabaseConnection
 from utils import safe_reply
-from constants import HOMEWORK_STATUS
+from constants import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
 class StatsManager:
-    def __init__(self, admin_ids):
-        self.db = DatabaseConnection()
-        self.admin_ids = admin_ids
+    def __init__(self, db):
+        self.db = db
+        self.admin_ids = ADMIN_IDS
 
     def get_average_homework_time(self, user_id):
         """Calculate average time between homework submission and approval."""
@@ -3670,14 +4433,16 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext, ConversationHandler
 from database import DatabaseConnection
 from utils import safe_reply
+from constants import ADMIN_GROUP_ID, ADMIN_IDS
 from constants import ADMIN_GROUP_ID
 
 logger = logging.getLogger(__name__)
 
 class SupportManager:
-    def __init__(self, admin_group_id):
-        self.db = DatabaseConnection()
-        self.admin_group_id = admin_group_id
+    def __init__(self, db):
+        self.db = db
+        self.admin_group_id = ADMIN_GROUP_ID
+        logger.info(f"85 SupportManager: init")
 
     async def show_support(self, update: Update, context: CallbackContext):
         """Shows support menu with options."""
@@ -3828,7 +4593,6 @@ class SupportManager:
             logger.error(f"Error sending support request to admin: {e}")
             await safe_reply(update, context, "Произошла ошибка при отправке запроса. Попробуйте позже.")
 
-support_manager = SupportManager(ADMIN_GROUP_ID)
 
 
 
@@ -4210,7 +4974,9 @@ async def safe_reply(update: Update, context: CallbackContext, text: str,
             await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
 
     except TelegramError as e:
-        logger.error(f"Ошибка при отправке сообщения: {e}")
+        logger.error(f"18 Ошибка телеграмма при отправке сообщения: {e}")
+    except Exception as e:
+        logger.error(f"19 Ошибка при отправке сообщения: {e}")
 
 def handle_telegram_errors(func):
     async def wrapper(*args, **kwargs):

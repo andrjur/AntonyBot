@@ -14,13 +14,14 @@ from database import load_bonuses, load_payment_info
 logger = logging.getLogger(__name__)
 
 class ShopManager:
-    def __init__(self, admin_group_id, tariffs_file, payment_info_file):
-        self.admin_group_id = admin_group_id
-        self.tariffs_file = tariffs_file
-        self.payment_info_file = payment_info_file
+    def __init__(self, db):
+        self.db = db
+        self.admin_group_id = ADMIN_GROUP_ID
         self.db = DatabaseConnection()
-        self.token_manager = None  # Add this line
-        self.init_lootboxes()  # Add this line
+        self.token_manager = None  #
+        self.init_lootboxes()
+        self.tariffs_file = CONFIG_FILES["TARIFFS"]
+        self.payment_info_file = CONFIG_FILES["PAYMENT_INFO"]
     
     def init_lootboxes(self):
         """Initialize lootboxes in the database."""
@@ -44,8 +45,6 @@ class ShopManager:
             logger.error(f"Ошибка при инициализации таблицы lootboxes: {e}")
         self.db = DatabaseConnection()
         self.admin_group_id = ADMIN_GROUP_ID
-        self.tariffs_file = tariffs_file
-        self.payment_info_file = payment_info_file
         self.bonuses = load_bonuses()  # Add this line
 
     async def apply_bonuses(self, user_id: int, price: float) -> float:
@@ -435,6 +434,5 @@ class ShopManager:
             return "Предмет добавлен в ваш инвентарь!"
         return "Неизвестная награда"
 
-tariffs_file=CONFIG_FILES["TARIFFS"]
-payment_info_file=CONFIG_FILES["PAYMENT_INFO"]
-shop_manager = ShopManager( ADMIN_GROUP_ID, tariffs_file, payment_info_file)
+
+
