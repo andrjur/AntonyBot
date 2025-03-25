@@ -2,5 +2,7 @@
   "monthly_bonus": 1,
   "birthday_bonus": 8,
   "referral_bonus": 4,
+  "homework_bonus": 3,
+  "course_completion_bonus": 10,
   "bonus_check_interval": 86400
 }

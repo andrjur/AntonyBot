@@ -25,6 +25,7 @@ from telegram.ext import (
     CallbackContext,
     CallbackQueryHandler,
     ConversationHandler,
+    Application  # <--- Добавьте это
 )
 
 import sqlite3
@@ -144,16 +145,20 @@ def load_bonuses():
         logger.error(f"Файл {BONUSES_FILE} не найден. Используются значения по умолчанию.")
         return {
             "monthly_bonus": 1,
-            "birthday_bonus": 5,
-            "referral_bonus": 2,
+            "birthday_bonus": 8,
+            "referral_bonus": 4,
+            "homework_bonus": 3,
+            "course_completion_bonus": 10,
             "bonus_check_interval": 86400,  # 24 hours
         }
     except json.JSONDecodeError:
         logger.error(f"Ошибка при чтении JSON из файла {BONUSES_FILE}. Используются значения по умолчанию.")
         return {
             "monthly_bonus": 1,
-            "birthday_bonus": 5,
-            "referral_bonus": 2,
+            "birthday_bonus": 8,
+            "referral_bonus": 4,
+            "homework_bonus": 3,
+            "course_completion_bonus": 10,
             "bonus_check_interval": 86400,  # 24 hours
         }
 
@@ -305,8 +310,7 @@ def load_delay_messages(file_path=DELAY_MESSAGES_FILE):
 
 # Загрузка фраз в начале программы
 HARD_CODE_DELAY = 5  # секунд. Даже если 5 часов укажешь
-DELAY_MESSAGES = load_delay_messages()  # TODO операция "Горец" – в живых должен остаться только один. Один. Виктор Один
-delay_messages = load_delay_messages(DELAY_MESSAGES_FILE)
+DELAY_MESSAGES = load_delay_messages(DELAY_MESSAGES_FILE)
 
 logger.info(f"DELAY_MESSAGES загружено {len(DELAY_MESSAGES)} строк вот две {DELAY_MESSAGES[:2]}")
 
@@ -410,6 +414,93 @@ async def safe_reply(update: Update, context: CallbackContext, text: str,
     except TelegramError as e:
         logger.error(f"Ошибка при отправке сообщения: {e}")
 
+def add_coins(user_id: int, amount: int):
+    """Добавляет коины пользователю в базе данных."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    try:
+        cursor.execute(
+            """
+            INSERT INTO user_tokens (user_id, tokens) 
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO 
+            UPDATE SET tokens = tokens + ?
+            """,
+            (user_id, amount, amount),
+        )
+        conn.commit()
+        logger.info(f"Пользователю {user_id} добавлено {amount} коинов.")
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при добавлении коинов пользователю {user_id}: {e}")
+
+
+def get_user_tokens(user_id: int) -> int:
+    """Получает количество токенов у пользователя."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    try:
+        cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+        else:
+            return 0  # Если пользователя нет в базе, возвращаем 0
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при получении количества токенов пользователя {user_id}: {e}")
+        return 0  # В случае ошибки возвращаем 0
+
+def is_birthday(user_id: int) -> bool:
+    """Проверяет, является ли сегодня день рождения пользователя."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    try:
+        cursor.execute("SELECT birthday FROM users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        if result and result[0]:
+            birthday_str = result[0]  # Получаем строку с датой дня рождения
+            birthday = datetime.strptime(birthday_str, '%Y-%m-%d').date()
+            today = date.today()
+            return birthday.month == today.month and birthday.day == today.day
+        return False
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при проверке дня рождения пользователя {user_id}: {e}")
+        return False
+    except ValueError as e:
+        logger.error(f"Ошибка при преобразовании даты дня рождения пользователя {user_id}: {e}. Убедитесь, что формат даты верный (YYYY-MM-DD).")
+        return False
+
+async def check_and_award_birthday_bonus(context: CallbackContext):
+    """Проверяет, у кого сегодня день рождения, и начисляет бонус."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+    try:
+        cursor.execute("SELECT user_id FROM users")  # Получаем всех пользователей
+        users = cursor.fetchall()
+
+        for user in users:
+            user_id = user[0]
+            if is_birthday(user_id):
+                bonus_amount = bonuses_config.get("birthday_bonus", 5)
+                add_coins(user_id, bonus_amount)
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"🎉 С днем рождения! Вам начислено {bonus_amount} коинов в честь вашего дня рождения!",
+                    )
+                except TelegramError as e:
+                    logger.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при выборке пользователей для проверки дня рождения: {e}")
+
+
 
 # кому платить строго ненадо    
 def load_payment_info(filename):
@@ -476,6 +567,23 @@ async def handle_user_info(update: Update, context: CallbackContext):  # Доб�
             """,
             (user_id, full_name),
         )
+
+        # Проверка существования токенов для пользователя
+        cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
+        tokens_data = cursor.fetchone()
+
+        if tokens_data is None:
+            # Если токены не существуют, создаем новую запись с начальным количеством токенов
+            cursor.execute(
+                "INSERT INTO user_tokens (user_id, tokens) VALUES (?, ?)",
+                (user_id, 3)  # Начальное количество токенов
+            )
+        else:
+            # Если запись существует, можно обновить количество токенов при необходимости
+            logger.info(f"Пользователь {user_id} уже имеет {tokens_data[0]} токенов.")
+
+        # Сохранение изменений в базе данных
+
         conn.commit()
 
         # Подтверждение записи
@@ -1010,7 +1118,7 @@ async def show_main_menu( update: Update, context: CallbackContext):
 
     user = update.effective_user
     user_id = user.id
-    logger.info(f" show_main_menu {user} --- ")
+    logger.info(f"12 show_main_menu       {user} --- ")
 
     # 1. Получаем количество токенов пользователя
     cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
@@ -1019,6 +1127,8 @@ async def show_main_menu( update: Update, context: CallbackContext):
 
     # 2. Получаем информацию о следующем бонусе
     next_bonus_info = await get_next_bonus_info(user_id)
+
+    logger.info(f"13 из базы получили токены ")
 
     # 3. Формируем сообщение
     # Преобразуем токены в монеты
@@ -1038,8 +1148,8 @@ async def show_main_menu( update: Update, context: CallbackContext):
         f"{BRONZE_COIN}x{bronze_coins}"
     )
     tokens = tokens_data[0] if tokens_data else 0  # просто считали заново
-
-    message = f"Ваши antCoins: {tokens}   {coins_display}\n"
+    logger.info(f"222  Ваши antCoins {coins_display} --- ")
+    message = f"  222 Ваши antCoins: {tokens}   {coins_display}\n"
     message += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
     message += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
 
@@ -1137,12 +1247,21 @@ async def show_main_menu( update: Update, context: CallbackContext):
         greeting = f"""Приветствую, {full_name.split()[0]}! {state_emoji}
         Курс: {active_course_id} ({course_type}) {active_tariff}
         Прогресс: {progress_text}
-        Домашка: {homework}     Для СамоОдобрения введи потом  /self_approve_{progress}"""
+        Домашка: {homework}  """
 
-        # Используйте: TODO отображение Qwen
+        logger.info(f" show_main_menu {user} --- ")
 
+        # 1. Получаем количество токенов пользователя
+        cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
+        tokens_data = cursor.fetchone()
+        logger.info(f"Select tokens FROM user_tokens WHERE user_id = ? {tokens_data} для {user_id} ")
+        tokens = tokens_data[0] if tokens_data else 0
 
-        greeting2=  f" \n Курс:  ({course_type})"
+        # 2. Получаем информацию о следующем бонусе
+        next_bonus_info = await get_next_bonus_info(user_id)
+
+        logger.info(f"14 получили токены и бонусы в меню {tokens}")
+
         # 3. Формируем сообщение
         # Преобразуем токены в монеты
         bronze_coins = tokens % 10  # 1 BRONZE_COIN = 1 токен
@@ -1162,9 +1281,36 @@ async def show_main_menu( update: Update, context: CallbackContext):
         )
         tokens = tokens_data[0] if tokens_data else 0  # просто считали заново
 
-        greeting2 += f"Ваши antCoins: {tokens}   {coins_display}\n"
-        greeting2 += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
-        greeting2 += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
+
+        greeting2=  f" \n "
+        # 3. Формируем сообщение
+        # Преобразуем токены в монеты
+        bronze_coins = tokens % 10  # 1 BRONZE_COIN = 1 токен
+        tokens //= 10  # остались десятки
+        silver_coins = tokens % 10  # 1 SILVER_COIN = 10 токенов
+        tokens //= 10  # остались сотки
+        gold_coins = tokens % 10  # 1 GOLD_COIN = 100 токенов
+        tokens //= 10  # остались тыщи
+        platinum_coins = tokens  # 1 GEM_COIN = 1000 токенов
+
+        # Формируем строку с монетами
+        gem = f"{PLATINUM_COIN}{platinum_coins}" if platinum_coins else ""
+        gol = f"{GOLD_COIN}{gold_coins}" if gold_coins>0 else ""
+        sil = f"{SILVER_COIN}{silver_coins}" if silver_coins>0 else ""
+        bro = f"{BRONZE_COIN}{bronze_coins}" if bronze_coins>0 else ""
+
+        coins_display = (
+            f"{gem} "
+            f"{gol} "
+            f"{sil} "
+            f"{bro}"
+        )
+        logger.info(f"14,5 считаем токены {coins_display=}")
+        tokens = tokens_data[0] if tokens_data else 0  # просто считали заново
+
+        greeting2 += f"💰AntCoins💰 {tokens}  =    {coins_display}  \n"
+       # greeting2 += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"   пока выключим, но TODO добавить замануху чтобы делали что то за очки
+       # greeting2 += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
 
         # Make buttons
         keyboard = [
@@ -1248,7 +1394,7 @@ async def old_get_main_menu_message( user: Update.effective_user) -> str:
         next_bonus_info = await get_next_bonus_info(user_id)
 
         # 3. Construct the message
-        message = f"Ваши antCoins: {tokens}\n"
+        message = f"555 Ваши antCoins: {tokens}\n"
         message += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
         message += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
 
@@ -1513,6 +1659,7 @@ def generate_lesson_keyboard( lessons, items_per_page=10):
 # домашка ???
 async def get_homework_status_text( user_id, course_id):
     """Возвращает текст статуса проверки домашнего задания."""
+    logger.info(f"get_homework_status_text  {user_id} 223 ")
     db = DatabaseConnection()
     conn = db.get_connection()
     cursor = db.get_cursor()
@@ -1550,7 +1697,7 @@ async def get_homework_status_text( user_id, course_id):
 
     # Формируем текст в зависимости от статуса
     if status == "pending":
-        return f"Домашка к {lesson} уроку на самопроверке"
+        return f"Домашка к {lesson} уроку на проверке у админов"
     elif status == "approved":
         return f"Домашка к {lesson} уроку принята"
     else:
@@ -1595,19 +1742,7 @@ async def activate_course(update: Update, context: CallbackContext, user_id: int
         )
         existing_course = cursor.fetchone()
 
-        # Раздача слонов Award initial coins upon course activation
-        bronze_coins = 3
-        silver_coins = 1
-        cursor.execute(
-            """
-                UPDATE users
-                SET bronze_coins = COALESCE(bronze_coins, 0) + ?,
-                    silver_coins = COALESCE(silver_coins, 0) + ?
-                WHERE user_id = ?
-            """,
-            (bronze_coins, silver_coins, user_id)
-        )
-        conn.commit()
+
         # продолжается
         user_data = await fetch_user_data(conn, cursor, user_id)
         if user_data:
@@ -2483,6 +2618,12 @@ async def self_approve_homework( update: Update, context: CallbackContext):
         # Отправляем сообщение об успешной самопроверке
         await update.message.reply_text("Домашнее задание подтверждено вами.")
 
+        # и добавляем бонусы токены
+        bonus_amount = bonuses_config.get("homework_bonus", 3)
+        add_coins(user_id, bonus_amount)
+        # Отправка подтверждения пользователю
+        await context.bot.send_message(chat_id=user_id, text=f"✅ Домашка принята! Вам начислено {bonus_amount} коинов.")
+
     except (IndexError, ValueError):
         # Обрабатываем ошибки, если не удалось извлечь hw_id
         await update.message.reply_text("Неверный формат команды. Используйте /self_approve<hw_id>.")
@@ -3282,7 +3423,7 @@ async def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     data = query.data
     user_id = update.effective_user.id if update.effective_user else None  # Safe get user_id
-    logger.info(f"{user_id} - button_handler")
+    logger.info(f" 1518 button_handler для  {user_id} - {data=}")
     await query.answer()
 
     # Обрабатывает нажатия на кнопки все
@@ -3313,6 +3454,7 @@ async def button_handler(update: Update, context: CallbackContext):
 
             elif data.startswith("approve_homework_"):
                 user_id_to_approve = data.split("_")[-1]
+                logger.info(f" 1553 approve_homework_ {user_id_to_approve}")
                 await approve_homework(update, context, user_id_to_approve)
                 return
 
@@ -3989,6 +4131,7 @@ async def handle_homework_actions( update: Update, context: CallbackContext):
     conn = db.get_connection()
     cursor = db.get_cursor()
     query = update.callback_query
+    logger.info(f"885  handle_homework_actions query: {query}")
     await query.answer()  # Acknowledge the callback
     data = query.data
 
@@ -4128,14 +4271,14 @@ async def ooollldddddd_approve_homework(update: Update, context: CallbackContext
      logger.error(f"Error while approving homework: {e}")
      await safe_reply( update, context, "An error occurred while approving the homework. Please try again later." )
 
-#18-03 17-08 Qwen
+# тут происходит принятие домашнего задания
 @handle_telegram_errors
 async def approve_homework(update: Update, context: CallbackContext, user_id_to_approve: str):
     """Обрабатывает одобрение домашнего задания администратором."""
     db = DatabaseConnection()
     conn = db.get_connection()
     cursor = db.get_cursor()
-
+    logger.info(f" 666 approve_homework нажали ОК   {user_id_to_approve=} ")
     try:
         # Преобразуем user_id в целое число
         user_id = int(user_id_to_approve)
@@ -4144,6 +4287,7 @@ async def approve_homework(update: Update, context: CallbackContext, user_id_to_
         await safe_reply(update, context, "Неверный ID пользователя.")
         return
 
+    logger.info(f" 667 нажали ОК approve_homework  {user_id=} ")
     try:
         # Получаем последнее ожидающее домашнее задание пользователя
         cursor.execute("""
@@ -4156,10 +4300,11 @@ async def approve_homework(update: Update, context: CallbackContext, user_id_to_
         homework_data = cursor.fetchone()
 
         if not homework_data:
-            await safe_reply(update, context, "У пользователя нет домашних заданий на проверке.")
+            await safe_reply(update, context, f"всё приняли для {user_id}")
             return
 
         hw_id, lesson, course_id = homework_data
+        logger.info(f" считали из базы SELECT hw_id, lesson, course_id FROM homeworks  {hw_id=} {lesson=} {course_id=} ")
 
         # Обновляем статус и время одобрения
         cursor.execute("""
@@ -4169,6 +4314,8 @@ async def approve_homework(update: Update, context: CallbackContext, user_id_to_
             WHERE hw_id = ?
         """, (hw_id,))
         conn.commit()
+
+        logger.info(f" SET status = 'approved', для {hw_id} ")
 
         # Проверяем успешность обновления
         if cursor.rowcount == 0:
@@ -4185,6 +4332,15 @@ async def approve_homework(update: Update, context: CallbackContext, user_id_to_
 
         # Логируем успешное действие
         logger.info(f"Admin {update.effective_user.id} approved homework {hw_id} for user {user_id}")
+
+        # отсыпем коинов
+        bonus_amount = bonuses_config.get("homework_bonus", 3)
+        add_coins(user_id, bonus_amount)
+        # Отправка подтверждения пользователю
+        await context.bot.send_message(chat_id=user_id, text=f"✅ Домашка принята! Вам начислено {bonus_amount} коинов.")
+
+        # Перерисовываем меню для пользователя
+        await show_main_menu(update, context)
 
     except sqlite3.Error as e:
         logger.error(f"Ошибка БД при одобрении ДЗ: {e}")
@@ -4532,7 +4688,7 @@ async def send_reminders( context: CallbackContext):
 
 
 @handle_telegram_errors
-def add_user_to_scheduler( user_id: int, time2: datetime,  context: CallbackContext, scheduler):
+def add_user_to_scheduler( user_id: int, time2: datetime,  context: CallbackContext, scheduler: AsyncIOScheduler):
     """Add user to send_lesson_by_timer with specific time."""
     db = DatabaseConnection()
     conn = db.get_connection()
@@ -4552,6 +4708,7 @@ def add_user_to_scheduler( user_id: int, time2: datetime,  context: CallbackCont
         )
     except Exception as e:
         logger.error(f"send_lesson_by_timer failed. {e}------------<<")
+
 
 
 async def stats( update: Update, context: CallbackContext):
@@ -5382,8 +5539,7 @@ async def process_selfie( update: Update, context: CallbackContext):
 
 
 # Обрабатывает описание для получения скидки.*
-async def process_description( update: Update,
-                              context: CallbackContext):
+async def process_description( update: Update,  context: CallbackContext):
     """Обрабатывает описание для получения скидки."""
     user_id = update.effective_user.id
     tariff = context.user_data.get("tariff")
@@ -5415,6 +5571,7 @@ async def process_description( update: Update,
 
 async def process_check( update: Update, context: CallbackContext):
     """Обрабатывает загруженный чек."""
+    logger.info(f"process_check  -------------<")
     try:
         user_id = update.effective_user.id
         tariff = context.user_data.get("tariff")
@@ -5453,8 +5610,7 @@ async def process_check( update: Update, context: CallbackContext):
         return ConversationHandler.END
 
 
-async def process_gift_user_id( update: Update,
-                               context: CallbackContext):
+async def process_gift_user_id( update: Update,  context: CallbackContext):
     """Обрабатывает User ID получателя подарка."""
     try:
         gift_user_id = update.message.text
@@ -5478,8 +5634,7 @@ async def process_gift_user_id( update: Update,
 
 
 # просим номерок *
-async def process_phone_number( update: Update,
-                               context: CallbackContext):
+async def process_phone_number( update: Update, context: CallbackContext):
     contact = update.message.contact
     phone_number = contact.phone_number
     logger.info(f"process_phone_number -------------<")
@@ -5666,7 +5821,7 @@ def create_all_tables(conn: sqlite3.Connection, cursor: sqlite3.Cursor):
 
             CREATE TABLE IF NOT EXISTS user_tokens (
                 user_id INTEGER PRIMARY KEY,
-                tokens INTEGER DEFAULT 0
+                tokens INTEGER DEFAULT 3
             );
 
             CREATE TABLE IF NOT EXISTS transactions (
@@ -5748,6 +5903,24 @@ def create_connection(db_file=DATABASE_FILE):
         logger.error(f"Ошибка при подключении к базе данных: {e}")
     return conn, cursor  # Всегда возвращаем кортеж (conn, cursor)
 
+async def schedule_birthday_checks(application: Application):
+    """Запускает проверку дней рождения и начисление бонусов."""
+    scheduler = application.bot_data.get('scheduler')
+    if scheduler is None:
+        logger.error("Scheduler не найден в context.bot_data!")
+        return
+
+    scheduler.add_job(
+        check_and_award_birthday_bonus,
+        trigger='cron',
+        hour=0,
+        minute=0,
+        start_date=datetime.now(),
+        kwargs={'context': CallbackContext(application.bot, application.bot_data)}
+    )
+
+
+
 
 def main():
     # Database connection
@@ -5763,8 +5936,7 @@ def main():
     else:
         logger.error("Database connection failed - cannot create tables")
 
-    # Job scheduler
-    scheduler = AsyncIOScheduler()
+
 
     # Check if TOKEN is None before building application
     if TOKEN is None:
@@ -5774,6 +5946,7 @@ def main():
 
     # Подключение middleware - ненадо. он всё ломает с гарантией
     # application.add_handler(MessageHandler(filters.ALL, logging_middleware))
+
 
     # ConversationHandler
     conv_handler = ConversationHandler( # скобка
@@ -5799,7 +5972,7 @@ def main():
         fallbacks = [CommandHandler("cancel",  cancel )],
         name = "my_conversation",
         allow_reentry = True,
-        )  # скобка
+        )
 
     application.add_handler(conv_handler)
 
@@ -5821,6 +5994,19 @@ def main():
     # Обработчик ошибок
     application.add_error_handler(handle_error)
 
+    # Запуск планировщика задач
+    scheduler = AsyncIOScheduler()
+    application.bot_data['scheduler'] = scheduler  # Сохраняем scheduler в bot_data
+
+    # Добавляем задачу для проверки и начисления бонусов за день рождения каждый день в 00:00
+    scheduler.add_job(
+        check_and_award_birthday_bonus,
+        trigger='cron',
+        hour=0,
+        minute=0,
+        start_date=datetime.now(),
+        kwargs={'context': CallbackContext(application.bot, application.bot_data)}
+    )
 
     scheduler.start()
 
@@ -5833,3 +6019,18 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+    # TODO добавлять коинов по завершении курса
+
+    # # Пример (замените на ваш реальный код)
+    # async def process_course_completion(user_id: int, course_id: str):
+    #     """Обрабатывает завершение курса."""
+    #     # ... ваш код обработки завершения курса ...
+    #     bonus_amount = bonuses_config.get("course_completion_bonus", 10)
+    #     add_coins(user_id, bonus_amount)
+    #     # Отправка подтверждения пользователю
+    #     await context.bot.send_message(chat_id=user_id,
+    #                                    text=f"🎉 Поздравляем с завершением курса! Вам начислено {bonus_amount} коинов.")
+
