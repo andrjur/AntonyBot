@@ -1896,15 +1896,159 @@ async def course_management( update: Update, context: CallbackContext):
     await update.message.reply_text("Управление курсом:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-#
-async def handle_homework_submission( update: Update, context: CallbackContext):
+async def handle_homework_submission(update: Update, context: CallbackContext):
     """Обрабатывает отправку домашнего задания (фото или документ), отправляя его администратору."""
     db = DatabaseConnection()
     conn = db.get_connection()
     cursor = db.get_cursor()
 
     user_id = update.effective_user.id
-    logger.info(f" handle_homework_submission {user_id=}")
+
+    logger.info(f"115 handle_homework_submission {user_id=}")
+
+    # Определяем, что пришло: фото или документ
+    if update.message.photo:
+        # Получаем file_id самого большого фото (последнего в списке)
+        file_id = update.message.photo[-1].file_id
+        file_type = "photo"
+    elif update.message.document and update.message.document.mime_type.startswith("image/"):
+        # Получаем file_id документа и проверяем, что это изображение
+        file_id = update.message.document.file_id
+        file_type = "document"
+    else:
+        await update.message.reply_text("⚠️ Отправьте, пожалуйста, картинку или фотографию.")
+        return
+
+    try:
+        # 1. Получаем active_course_id и lesson  и tariff из базы данных
+        cursor.execute(
+            """
+            SELECT u.active_course_id, uc.progress, uc.tariff
+            FROM users u
+            JOIN user_courses uc ON u.user_id = uc.user_id AND u.active_course_id = uc.course_id
+            WHERE u.user_id = ?
+            """,
+            (user_id,),
+        )
+        course_data = cursor.fetchone()
+
+        if not course_data:
+            await update.message.reply_text("Пожалуйста, активируйте курс или подпишитесь на него.")
+            return
+
+        active_course_id = course_data[0]
+        lesson = course_data[1]
+        tariff = course_data[2]
+
+
+        # Сохраняем информацию о домашнем задании в базе данных
+        cursor.execute(
+            """
+            INSERT INTO homeworks (user_id, course_id, lesson, file_id, file_type, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (user_id, active_course_id, lesson, file_id, file_type, "pending"),
+        )
+        conn.commit()
+
+        # 3 Получаем hw_id только что добавленной записи
+        cursor.execute(
+            """
+            SELECT hw_id FROM homeworks 
+            WHERE user_id = ? AND course_id = ? AND lesson = ?
+            ORDER BY hw_id DESC LIMIT 1
+        """,
+            (user_id, active_course_id, lesson),
+        )
+        hw_id_data = cursor.fetchone()
+        hw_id = hw_id_data[0] if hw_id_data else None
+
+        if hw_id is None:
+            logger.error(
+                f"Не удалось получить hw_id для user_id={user_id}, course_id={active_course_id}, lesson={lesson}")
+            await update.message.reply_text("Произошла ошибка при обработке домашнего задания. Попробуйте позже.")
+            return
+
+        # Если тариф с самопроверкой
+        if tariff == "self_check":
+            # Отправка кнопки для самопроверки пользователю
+            logger.info( f"Пользователь {user_id} самопроверка по курсу {active_course_id}, урок {lesson}.")
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "✅ СамоПринять домашнее задание",
+                        callback_data=f"self_approve_{hw_id}",
+                    )
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                f"Домашнее задание по уроку {lesson} отправлено. Вы самостоятельно подтверждаете выполнение.",
+                reply_markup=reply_markup,
+            )
+        else:
+            # Отправка домашнего задания админу для проверки
+            logger.info(f"Пользователь {user_id} отправил домашку админам по курсу {active_course_id}, урок {lesson}.")
+            file_path = await context.bot.get_file(file_id).file_path
+            logger.info(f" {file_path=} ")
+
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Принять", callback_data=f"approve_homework_{active_course_id}{user_id}{lesson}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"decline_homework_{hw_id}"),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            admin_message = f"Пользователь {user_id} отправил домашнее задание по курсу {active_course_id}, урок {lesson}."
+
+            try:
+                # Отправляем фото или документ администратору
+                if file_type == "photo":
+                    await context.bot.send_photo(
+                        chat_id=ADMIN_GROUP_ID,
+                        photo=file_id,
+                        caption=admin_message,
+                        reply_markup=reply_markup,
+                    )
+                elif file_type == "document":
+                    await context.bot.send_document(
+                        chat_id=ADMIN_GROUP_ID,
+                        document=file_id,
+                        caption=admin_message,
+                        reply_markup=reply_markup,
+                    )
+                logger.info(f"Отправлено домашнее задание админу для user {user_id}, урок {lesson}")
+
+            except FileNotFoundError:
+                logger.error(f"Файл не найден: {file_path}")
+                await update.message.reply_text("Произошла ошибка: файл не найден. Попробуйте отправить ДЗ снова.")
+                return  # Важно: прекратить дальнейшее выполнение
+
+            except Exception as e:
+                logger.error(f"Ошибка при отправке сообщения админу: {e}")
+                await update.message.reply_text("Произошла ошибка при отправке сообщения админу. Попробуйте позже.")
+                return
+
+        await update.message.reply_text("Домашнее задание отправлено на проверку.")
+    except Exception as e:
+        logger.error(f"Ошибка при обработке домашнего задания: {e}")
+        await update.message.reply_text("Произошла ошибка при обработке домашнего задания. Попробуйте позже.")
+    finally:
+        # Показываем главное меню
+        await show_main_menu(update, context)
+        return ACTIVE
+
+
+#
+async def ex_handle_homework_submission( update: Update, context: CallbackContext):
+    """Обрабатывает отправку домашнего задания (фото или документ), отправляя его администратору."""
+    db = DatabaseConnection()
+    conn = db.get_connection()
+    cursor = db.get_cursor()
+
+    user_id = update.effective_user.id
+
+    logger.info(f"115 handle_homework_submission {user_id=} ")
 
     # Определяем, что пришло: фото или документ
     if update.message.photo:
@@ -1993,7 +2137,7 @@ async def handle_homework_submission( update: Update, context: CallbackContext):
             # Отправка домашнего задания админу для проверки
             keyboard = [
                 [
-                    InlineKeyboardButton("✅ Принять", callback_data=f"approve_homework_{hw_id}"),
+                    InlineKeyboardButton("✅ Принять", callback_data=f"approve_homework_{active_course_id_full}{user_id}{lesson}"),
                     InlineKeyboardButton("❌ Отклонить", callback_data=f"decline_homework_{hw_id}"),
                 ]
             ]
@@ -3453,9 +3597,27 @@ async def button_handler(update: Update, context: CallbackContext):
                 return
 
             elif data.startswith("approve_homework_"):
-                user_id_to_approve = data.split("_")[-1]
-                logger.info(f" 1553 approve_homework_ {user_id_to_approve}")
-                await approve_homework(update, context, user_id_to_approve)
+                try:
+                    parts = data.split("_")
+                    if len(parts) == 4:
+                        course_id = parts[2]
+                        user_id_to_approve = int(parts[1])  # Telegram user ID
+                        lesson = int(parts[3])
+                        logger.info(f" 1553 approve_homework_ {user_id_to_approve=}")
+                        await approve_homework(update, context, course_id, user_id_to_approve, lesson)
+                        return
+                    else:
+                        logger.warning(f"Неверный формат callback_data: {data}")
+                        await safe_reply(update, context, "Неверный формат данных.")
+
+                except ValueError as e:
+                    logger.error(f"Ошибка при обработке callback_data: {e}")
+                    await safe_reply(update, context, "Ошибка: Неверный формат данных.")
+
+                except Exception as e:
+                    logger.error(f"Неизвестная ошибка при обработке запроса: {e}")
+                    await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
+
                 return
 
             elif data.startswith("decline_homework_"):
@@ -4273,84 +4435,66 @@ async def ooollldddddd_approve_homework(update: Update, context: CallbackContext
 
 # тут происходит принятие домашнего задания
 @handle_telegram_errors
-async def approve_homework(update: Update, context: CallbackContext, user_id_to_approve: str):
-    """Обрабатывает одобрение домашнего задания администратором."""
+async def approve_homework(update: Update,context: CallbackContext,
+    course_id: str,
+    user_id_to_approve: int,  # Telegram user ID
+    lesson: int,):
+    """ Обрабатывает одобрение домашнего задания администратором.
+    Args:         update: Объект Update от Telegram.
+        context: Объект CallbackContext.
+        course_id: ID курса.
+        user_id_to_approve: Telegram ID пользователя, чье ДЗ одобряется.
+        lesson: Номер урока, для которого одобряется ДЗ.    """
+
     db = DatabaseConnection()
     conn = db.get_connection()
     cursor = db.get_cursor()
-    logger.info(f" 666 approve_homework нажали ОК   {user_id_to_approve=} ")
-    try:
-        # Преобразуем user_id в целое число
-        user_id = int(user_id_to_approve)
-    except ValueError:
-        logger.error(f"Неверный формат user_id: {user_id_to_approve}")
-        await safe_reply(update, context, "Неверный ID пользователя.")
-        return
+    logger.info(f" 671  approve_homework update: {update}")
+    # Проверяем, является ли update CallbackQuery
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()  # Отправляем подтверждение, только если это CallbackQuery
 
-    logger.info(f" 667 нажали ОК approve_homework  {user_id=} ")
-    try:
-        # Получаем последнее ожидающее домашнее задание пользователя
-        cursor.execute("""
-            SELECT hw_id, lesson, course_id 
-            FROM homeworks 
-            WHERE user_id = ? AND status = 'pending' 
-            ORDER BY timestamp DESC 
-            LIMIT 1
-        """, (user_id,))
-        homework_data = cursor.fetchone()
+        user_id = user_id_to_approve  # Используем Telegram ID
 
-        if not homework_data:
-            await safe_reply(update, context, f"всё приняли для {user_id}")
-            return
+        try:
+            # Получаем текущее время
+            approval_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        hw_id, lesson, course_id = homework_data
-        logger.info(f" считали из базы SELECT hw_id, lesson, course_id FROM homeworks  {hw_id=} {lesson=} {course_id=} ")
+            # Обновляем статус домашнего задания на "approved" и заполняем остальные поля
+            cursor.execute(
+                """
+                UPDATE homeworks
+                SET status = 'approved',
+                    approval_time = ?,
+                    final_approval_time = ?
+                WHERE user_id = ? AND lesson = ? AND course_id = ? AND status = 'pending'
+            """,
+                (approval_time, approval_time, user_id, lesson, course_id),
+            )
+            conn.commit()
 
-        # Обновляем статус и время одобрения
-        cursor.execute("""
-            UPDATE homeworks 
-            SET status = 'approved', 
-                approval_time = strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime') 
-            WHERE hw_id = ?
-        """, (hw_id,))
-        conn.commit()
+            # Проверяем успешность обновления
+            if cursor.rowcount == 0:
+                await safe_reply(update, context, "Не удалось обновить статус задания или задание уже было принято.")
+                return
 
-        logger.info(f" SET status = 'approved', для {hw_id} ")
+            # Уведомляем пользователя
+            await context.bot.send_message(chat_id=user_id, text=f"Домашнее задание по уроку {lesson} принято!")
+            await safe_reply(update, context, text="Домашнее задание подтверждено администратором.")
 
-        # Проверяем успешность обновления
-        if cursor.rowcount == 0:
-            await safe_reply(update, context, "Не удалось обновить статус задания.")
-            return
+            # отсыпем коинов
+            bonus_amount = bonuses_config.get("homework_bonus", 3)
+            add_coins(user_id, bonus_amount)
+            # Отправка подтверждения пользователю
+            await context.bot.send_message(chat_id=user_id,
+                                           text=f"✅ Домашка принята! Вам начислено {bonus_amount} коинов.")
 
-        # Уведомляем администратора
-        admin_message = f"✅ Домашнее задание пользователя {user_id} (урок {lesson}) одобрено."
-        await safe_reply(update, context, admin_message)
-
-        # Уведомляем пользователя
-        user_message = f"Поздравляем! Ваше задание по курсу {course_id} (урок {lesson}) принято администратором."
-        await context.bot.send_message(chat_id=user_id, text=user_message)
-
-        # Логируем успешное действие
-        logger.info(f"Admin {update.effective_user.id} approved homework {hw_id} for user {user_id}")
-
-        # отсыпем коинов
-        bonus_amount = bonuses_config.get("homework_bonus", 3)
-        add_coins(user_id, bonus_amount)
-        # Отправка подтверждения пользователю
-        await context.bot.send_message(chat_id=user_id, text=f"✅ Домашка принята! Вам начислено {bonus_amount} коинов.")
-
-        # Перерисовываем меню для пользователя
-        await show_main_menu(update, context)
-
-    except sqlite3.Error as e:
-        logger.error(f"Ошибка БД при одобрении ДЗ: {e}")
-        await safe_reply(update, context, "Ошибка базы данных. Попробуйте позже.")
-    except Exception as e:
-        logger.error(f"Непредвиденная ошибка: {e}")
-        await safe_reply(update, context, "Произошла ошибка. Попробуйте позже.")
-    finally:
-        if conn:
-            conn.close()
+            # Перерисовываем меню для пользователя
+            await show_main_menu(update, context)
+        except Exception as e:
+            logger.error(f"Ошибка при подтверждении домашнего задания: {e}")
+            await safe_reply(update, context, "Произошла ошибка при подтверждении домашнего задания.")
 
 @handle_telegram_errors
 async def oooold_decline_homework(update: Update, context: CallbackContext, user_id_to_decline: str):
