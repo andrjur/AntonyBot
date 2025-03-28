@@ -1175,29 +1175,18 @@ async def get_available_products( tokens: int) -> str:
     products_str = products_str[:-1] if products_str else products_str
     return products_str
 
-
-
-@handle_telegram_errors
-async def show_main_menu( update: Update, context: CallbackContext):
+def coins_display_db(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     user = update.effective_user
     logger.info(f" show_main_menu       {update.effective_user} ---")
     db = DatabaseConnection()
     conn = db.get_connection()
     cursor = db.get_cursor()
-
-
-    # 1. Получаем количество токенов пользователя
+    # 1. Получаем количество токенов пользователя 1
     cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
     tokens_data = cursor.fetchone()
     tokens = tokens_data[0] if tokens_data else 0
-
-    # 2. Получаем информацию о следующем бонусе
-    next_bonus_info = await get_next_bonus_info(user_id)
-
-    logger.info(f"432 из базы получили токены ")
-
-    # 3. Формируем сообщение
+    logger.info(f"432 из базы получили токены {tokens=} ")
     # Преобразуем токены в монеты
     bronze_coins = tokens % 10  # 1 BRONZE_COIN = 1 токен
     tokens //= 10  # остались десятки
@@ -1208,235 +1197,148 @@ async def show_main_menu( update: Update, context: CallbackContext):
     platinum_coins = tokens  # 1 GEM_COIN = 1000 токенов
 
     # Формируем строку с монетами
+    gem = f"{PLATINUM_COIN}{platinum_coins}" if platinum_coins else ""
+    gol = f"{GOLD_COIN}{gold_coins}" if gold_coins > 0 else ""
+    sil = f"{SILVER_COIN}{silver_coins}" if silver_coins > 0 else ""
+    bro = f"{BRONZE_COIN}{bronze_coins}" if bronze_coins > 0 else ""
+
     coins_display = (
-        f"{PLATINUM_COIN}x{platinum_coins}"
-        f"{GOLD_COIN}x{gold_coins}"
-        f"{SILVER_COIN}x{silver_coins}"
-        f"{BRONZE_COIN}x{bronze_coins}"
+        f"{gem} "
+        f"{gol} "
+        f"{sil} "
+        f"{bro}"
     )
-    tokens = tokens_data[0] if tokens_data else 0  # просто считали заново
-    logger.info(f"222  Ваши antCoins {coins_display} --- ")
+    return tokens, coins_display
 
-    message = f" Ваши antCoins: {tokens}   {coins_display}\n"
-    message += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
-    message += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
+  # менюха  TODO начисления добавить серым цветом в меню
+async def show_main_menu( update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    user = update.effective_user
+    logger.info(f" show_main_menu       {update.effective_user} ---")
+    db = DatabaseConnection()
+    cursor = db.get_cursor()
+    tokens, coins_display=coins_display_db(update, context)
 
-    # 4. Получаем доступные товары для покупки
-    products_message = await get_available_products(tokens)
-    message += products_message
+    # 2. Получаем информацию о следующем бонусе
+    next_bonus_info = await get_next_bonus_info(user_id)
+
+
     try:
         # Get data of course
         cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user.id,))
         active_course_data = cursor.fetchone()
-        logger.info(f"434 active_course_data= {active_course_data} на будущее {message=} ---- ")
+        course_data = None
+        logger.info(f"434 active_course_data= {active_course_data}  ")
         # TODO: продукты подсовывать доступные
-        if not active_course_data or not active_course_data[0]:
-            message_text = "Активируйте курс с помощью кодового слова."
-            await safe_reply(update, context, message_text)
-            logger.info(f"User {update.effective_user.id} transitioning to  ConversationHandler.END state")
-            return ConversationHandler.END
+        if active_course_data:
+            active_course_id_full = active_course_data[0]
+            # Short name
+            active_course_id = active_course_id_full.split("_")[0]
+            logger.info(f"435 active_course_id= {active_course_id} ======================== ")
+            # Short name
+            active_tariff = active_course_id.split("_")[1] if len(active_course_id.split("_")) > 1 else "default"
+            logger.info(f"435 пока course_data= {active_course_data=} ----- ")
+            cursor.execute(
+                "SELECT course_type, progress FROM user_courses WHERE user_id = ? AND course_id = ?",
+                (user_id, active_course_id),
+            )
+            course_data = cursor.fetchone()
+            logger.info(f"438 считали SELECT course_type, progress FROM user_courses WHERE user_id = ? AND course_id = ?")
+            logger.info(f"435 course_data= {course_data=} ==========- ")
 
-        active_course_id_full = active_course_data[0]
-        # Short name
-        active_course_id = active_course_id_full.split("_")[0]
-        active_tariff = active_course_id_full.split("_")[1] if len(active_course_id_full.split("_")) > 1 else "default"
-
-        # Получаем данные о типе курса и прогрессе
-        cursor.execute(
-            """
-            SELECT course_type, progress
-            FROM user_courses
-            WHERE user_id = ? AND course_id = ?
-        """,
-            (user.id, active_course_id_full),
-        )
-        course_data = cursor.fetchone()
-        logger.info(f"435 course_data= {course_data} ----- ")
-
-        if not course_data:
-            logger.warning(f"Не найден course_type для user_id={user.id} и course_id={active_course_id_full}")
-            course_type, progress = "unknown", 0  # Установите значения по умолчанию
-        else:
-            course_type, progress = course_data
-
-        # Debug state
-        if context.user_data and context.user_data.get("waiting_for_code"):
-            state_emoji = "🔑"  # Key emoji for 'waiting_for_code' state
-        else:
-            state_emoji = "✅"  # Checkmark for other states
-
-        # Формируем меню в зависимости от наличия курса и прогресса
+            # Формируем меню в зависимости от наличия курса и прогресса
         if course_data:
             course_type, progress = course_data
             logger.info(f"436 Тип курса: {course_type=} Прогресс: {progress=} ------ ")
-            logger.info(f"437 {course_type=} {progress=} ------ ")
-            cursor.execute("SELECT settings FROM user_settings WHERE user_id = ?", (user_id,))
+            logger.info(f"437 course_type={course_type} progress={progress} ------ ")
+
+            cursor.execute(
+                "SELECT morning_notification, evening_notification, show_example_homework FROM user_settings WHERE user_id = ?",
+                (user_id,))
             settings_data = cursor.fetchone()
-            logger.info(f"438 Настройки уведомлений:  {settings_data=} ------- ")
+            logger.info(f"438555 Настройки уведомлений:  {settings_data=} - ")
 
-            cursor.execute("SELECT name FROM users WHERE user_id = ?", (user_id,))
-            name_data = cursor.fetchone()
-            logger.info(f"439 Имя пользователя:  {name_data=} -------- ")
-            settings = settings_data[0] if settings_data else None
-            logger.info(f"440 {settings=} ------- ")
-            name_data = cursor.execute("SELECT name FROM users WHERE user_id = ?", (user_id,)).fetchone()
-            logger.info(f" 441 {name_data=} -------- ")
-
+            name_data = cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user_id,)).fetchone()
+            logger.info(f"439-555 {name_data=}")
             full_name = name_data[0] if name_data else "Пользователь"
-            logger.info(f"443 {full_name=} --------- ")
+
+
+
 
             # Получаем статус домашки и формируем текст
-            homework_status = await get_homework_status_text(user_id, progress)
-            logger.info(f"444 homework={homework_status=} --------- ")
-
-            # Calculate next lesson time
-            next_lesson_time = datetime.now() + timedelta(hours=DEFAULT_LESSON_INTERVAL)
-            formatted_next_lesson_time = next_lesson_time.strftime("%d-%m-%Y %H:%M")
-
-            # Combine homework status and next lesson time
-            homework_and_next_lesson = f"{homework_status}  \nСледующий урок в {formatted_next_lesson_time} "
+            homework_status = await get_homework_status_text(user_id, active_course_id)
+            logger.info(f"444 homework={homework_status} --------- ")
 
             # Получаем файлы урока
             lesson_dir = f"courses\\{active_course_id}"
             lesson_files = get_lesson_files(user_id, progress, lesson_dir)  # исправил на await
 
-            main_menu_text = f"Приветствую, {full_name}! {state_emoji}\n" \
-                             f"        Курс: {active_course_id} (main) premium\n" \
-                             f"        Прогресс: Текущий урок: {progress}\n" \
-                             f"        Домашка: {homework_and_next_lesson}   \n" \
-                             f" {PLATINUM_COIN}AntCoins{PLATINUM_COIN} {tokens}  =      {coins_display}"
+            if context.user_data and context.user_data.get("waiting_for_code"):
+                state_emoji = "🔑"  # Key emoji for 'waiting_for_code' state
+            else:
+                state_emoji = "✅"  # Checkmark for other states
 
+            main_menu_text = f"Приветствую, {full_name}! {state_emoji}\n" \
+                             f"        Курс: {active_course_id} \n" \
+                             f"        Прогресс: Текущий урок: {progress}\n" \
+                             f"        Домашка: {homework_status}   \n"
+                            # f" 💰AntCoins💰 {tokens}  =      {coins_display}"
             lesson_files = await get_lesson_files(user_id, progress, lesson_dir)
             logger.info(f"445 lesson_files = {lesson_files}  -=- ")
 
         else:
-            main_menu_text = "Чтобы начать обучение, активируйте курс с помощью кодового слова."
+            main_menu_text = "Чтобы начать обучение, активируйте курс с помощью кодового слова."# исправил на await
+
+        # Notifications
+        cursor.execute(
+            "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
+            (user.id,),
+        )
+        settings = cursor.fetchone()
+        logger.info(f"559 {settings=}  ------- ")
+        morning_time = settings[0] if settings and len(settings) > 0 else "Not set"  # CHECK LENGHT
+        evening_time = settings[1] if settings and len(settings) > 1 else "Not set"  # CHECK LENGHT
 
 
 
-        progress_text = f"Текущий урок: {progress}" if progress else "--"
-        greeting = f"""Приветствую, {full_name.split()[0]}! {state_emoji}
-        Курс: {active_course_id} ({course_type}) {active_tariff}
-        Прогресс: {progress_text}
-        Домашка: {homework}  """
+        lesson_files = await get_lesson_files(user_id, progress, lesson_dir)
+        logger.info(f"445 lesson_files = {lesson_files}  -=- ")
 
-        logger.info(f" show_main_menu {user} --- ")
-
-        # 1. Получаем количество токенов пользователя
-        cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
-        tokens_data = cursor.fetchone()
-        logger.info(f"Select tokens FROM user_tokens WHERE user_id = ? {tokens_data} для {user_id} ")
-        tokens = tokens_data[0] if tokens_data else 0
 
         # 2. Получаем информацию о следующем бонусе
         next_bonus_info = await get_next_bonus_info(user_id)
-
         logger.info(f"14 получили токены и бонусы в меню {tokens}")
 
-        # 3. Формируем сообщение
-        # Преобразуем токены в монеты
-        bronze_coins = tokens % 10  # 1 BRONZE_COIN = 1 токен
-        tokens //= 10  # остались десятки
-        silver_coins = tokens % 10  # 1 SILVER_COIN = 10 токенов
-        tokens //= 10  # остались сотки
-        gold_coins = tokens % 10  # 1 GOLD_COIN = 100 токенов
-        tokens //= 10  # остались тыщи
-        platinum_coins = tokens  # 1 GEM_COIN = 1000 токенов
-
-        # Формируем строку с монетами
-        coins_display = (
-            f"{PLATINUM_COIN}x{platinum_coins}"
-            f"{GOLD_COIN}x{gold_coins}"
-            f"{SILVER_COIN}x{silver_coins}"
-            f"{BRONZE_COIN}x{bronze_coins}"
-        )
-        tokens = tokens_data[0] if tokens_data else 0  # просто считали заново
-
-
-        greeting2=  f" \n "
-        # 3. Формируем сообщение
-        # Преобразуем токены в монеты
-        bronze_coins = tokens % 10  # 1 BRONZE_COIN = 1 токен
-        tokens //= 10  # остались десятки
-        silver_coins = tokens % 10  # 1 SILVER_COIN = 10 токенов
-        tokens //= 10  # остались сотки
-        gold_coins = tokens % 10  # 1 GOLD_COIN = 100 токенов
-        tokens //= 10  # остались тыщи
-        platinum_coins = tokens  # 1 GEM_COIN = 1000 токенов
-
-        # Формируем строку с монетами
-        gem = f"{PLATINUM_COIN}{platinum_coins}" if platinum_coins else ""
-        gol = f"{GOLD_COIN}{gold_coins}" if gold_coins>0 else ""
-        sil = f"{SILVER_COIN}{silver_coins}" if silver_coins>0 else ""
-        bro = f"{BRONZE_COIN}{bronze_coins}" if bronze_coins>0 else ""
-
-        coins_display = (
-            f"{gem} "
-            f"{gol} "
-            f"{sil} "
-            f"{bro}"
-        )
-        logger.info(f"14,5 считаем токены {coins_display=}")
-        tokens = tokens_data[0] if tokens_data else 0  # просто считали заново
-
-        greeting2 += f"💰AntCoins💰 {tokens}  =    {coins_display}  \n"
-
+        main_menu_text += f"💰AntCoins💰 {tokens}  =    {coins_display}  \n"
        # greeting2 += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"   пока выключим, но TODO добавить замануху чтобы делали что то за очки
        # greeting2 += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
 
         # Make buttons
-        keyboard = [
-            [
-                InlineKeyboardButton("📚 Текущий Урок - повтори всё", callback_data="get_current_lesson"),
-                InlineKeyboardButton("🖼 Галерея ДЗ", callback_data="gallery"),
-            ],
-            [
-                InlineKeyboardButton(
-                    f"⚙ Настройка Курса ⏰({morning_time}, {evening_time})",
-                    callback_data="course_settings",
-                )
-            ],
-            [
-                InlineKeyboardButton("💰 Тарифы и Бонусы <- тут много", callback_data="tariffs"),
-            ],
-            [InlineKeyboardButton("🙋 ПоДдержка", callback_data="support")],
-        ]
+        keyboard = [ [InlineKeyboardButton("📚 Текущий Урок - повтори всё", callback_data="get_current_lesson"),
+                InlineKeyboardButton("🖼 Галерея ДЗ", callback_data="gallery"), ],
+            [InlineKeyboardButton(f"⚙ Настройка Курса ⏰({morning_time}, {evening_time})",callback_data="course_settings", ) ],
+            [ InlineKeyboardButton("💰 Тарифы и Бонусы <- тут много", callback_data="tariffs"),  ],
+            [InlineKeyboardButton("🙋 ПоДдержка", callback_data="support")],   ]
 
         # ADD DYNAMIC BUTTON для предварительных материалов
         # Find lesson
         next_lesson = progress + 1
 
         # If lesson available add it
-        lessons = get_preliminary_materials(active_course_id, next_lesson)
-        if len(lessons) > 0 and not (homework.startswith("есть")):
-            keyboard.insert(
-                0,
-                [
-                    InlineKeyboardButton(
-                        "🙇🏼Предварительные материалы к след. уроку",
-                        callback_data="preliminary_tasks",
-                    )
-                ],
-            )
+        lessons = get_preliminary_materials(active_course_id.split("_")[0], next_lesson)
+        if len(lessons) > 0 and not (homework_status.startswith("есть")):
+            keyboard.insert( 0, [ InlineKeyboardButton( "🙇🏼Предварительные материалы к след. уроку",
+                        callback_data="preliminary_tasks",    )         ], )
 
         # Кнопка самоодобрения для тарифа self_check
         if active_tariff == "self_check":
-            keyboard.insert(
-                0,
-                [
-                    InlineKeyboardButton(
-                        "✅ Самоодобрение ДЗ",
-                        callback_data=f"self_approve_{progress}"
-                    )
-                ],
-            )
+            keyboard.insert(0,[InlineKeyboardButton( "✅ Самоодобрение ДЗ", callback_data=f"self_approve_{progress}")],)
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-
         logger.info(f"888 pre #Send menu  ---------- ")
         # Send menu
         try:
-            await safe_reply(update, context, greeting+greeting2, reply_markup=reply_markup)
+            await safe_reply(update, context, main_menu_text, reply_markup=reply_markup)
             logger.info(f"889 норм всё - послали safe_reply")
         except TelegramError as e:
             logger.error(f"Telegram API error: {e}")
@@ -1449,151 +1351,6 @@ async def show_main_menu( update: Update, context: CallbackContext):
         return ConversationHandler.END
 
 
-# формирование сообщения 17-03 вечер perplexity
-async def old_get_main_menu_message( user: Update.effective_user) -> str:
-    """Формирует текст сообщения для главного меню."""
-    db = DatabaseConnection()
-    conn = db.get_connection()
-    cursor = db.get_cursor()
-
-    user_id = user.id
-
-    try:
-        # 1. Get user's tokens
-        cursor.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,))
-        tokens_data = cursor.fetchone()
-        tokens = tokens_data[0] if tokens_data else 0
-
-        # 2. Get next bonus information
-        next_bonus_info = await get_next_bonus_info(user_id)
-
-        # 3. Construct the message
-        message = f"555 Ваши antCoins: {tokens}\n"
-        message += f"Последнее начисление: {next_bonus_info['last_bonus']}\n"
-        message += f"Следующее начисление: {next_bonus_info['next_bonus']}\n"
-
-        # 4. Get available products for purchase
-        products_message = await get_available_products(tokens)
-        message += products_message
-
-        # Get data of course
-        cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user.id,))
-        active_course_data = cursor.fetchone()
-        logger.info(f" active_course_data= {active_course_data} ---- ")
-
-        if not active_course_data or not active_course_data[0]:
-            return "Активируйте курс с помощью кодового слова."
-
-        active_course_id_full = active_course_data[0]
-        # Short name
-        active_course_id = active_course_id_full.split("_")[0]
-        active_tariff = active_course_id_full.split("_")[1] if len(active_course_id_full.split("_")) > 1 else "default"
-
-        # Data of course
-        cursor.execute(
-            """
-            SELECT course_type, progress
-            FROM user_courses
-            WHERE user_id = ? AND course_id = ?
-        """,
-            (user.id, active_course_id_full),
-        )
-        course_data = cursor.fetchone()
-        logger.info(f" course_data= {course_data} ----- ")
-
-        if not course_data:
-            logger.warning(f"Не найден course_type для user_id={user.id} и course_id={active_course_id_full}")
-            course_type, progress = "unknown", 0  # Установите значения по умолчанию
-        else:
-            course_type, progress = course_data
-        logger.info(f" 558 {course_type=} {progress=} ------ ")
-        # Notifications
-        cursor.execute(
-            "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
-            (user.id,),
-        )
-        settings = cursor.fetchone()
-        logger.info(f"559 {settings=}  ------- ")
-        morning_time = settings[0] if settings and len(settings) > 0 else "Not set"  # CHECK LENGHT
-        evening_time = settings[1] if settings and len(settings) > 1 else "Not set"  # CHECK LENGHT
-
-        # Get username
-        cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user.id,))
-        name_data = cursor.fetchone()
-        logger.info(f"560{name_data=}  -------- ")
-
-        if name_data and len(name_data) > 0:
-            full_name = name_data[0]
-        else:
-            full_name = "Пользователь"
-            logger.warning(f" 561 Не найдено имя пользователя {user.id} в базе данных")
-        logger.info(f"562 {full_name=}  --------- ")
-
-        homework = await get_homework_status_text(user.id, active_course_id_full)
-        logger.info(f"563 {homework=}  --------- ")
-
-        message = f"Приветствую, {full_name}! ✅\n"
-        message += f"        Курс: {active_course_id} \n"  # TODO получить course_name из course_id
-        message += homework
-
-        return message
-
-    except Exception as e:
-        logger.error(f"564 Ошибка при формировании сообщения для главного меню: {e}")
-        return "Произошла ошибка. Попробуйте позже."
-
-
-@handle_telegram_errors
-async def old_start(update: Update, context: CallbackContext) -> int:
-    """Starts the conversation and asks the user for their name."""
-    db = DatabaseConnection()
-    conn = db.get_connection()
-    cursor = db.get_cursor()
-
-    user_id = update.effective_user.id if update.effective_user else None
-    if user_id is None:
-        logger.error("Could not get user ID - effective_user is None")
-        logger.info(f"User {update.effective_user.id} transitioning to  ConversationHandler.END state")
-        return ConversationHandler.END
-
-    logger.info(f"Начало разговора с пользователем {user_id} =================================================================")
-    logger.info(f"Пользователь {user_id} запустил команду /start")
-
-    # Fetch user info from the database
-    cursor.execute("SELECT full_name, active_course_id FROM users WHERE user_id = ?", (user_id,))
-    user_data = cursor.fetchone()
-
-    if user_data:
-        full_name = user_data[0]
-        active_course_id = user_data[1]
-
-        if full_name:
-            if active_course_id:
-                logger.info(f"Пользователь {user_id} уже зарегистрирован и курс активирован.")
-                await show_main_menu(update, context)  # Direct user to main menu
-                logger.info(f"User {update.effective_user.id} transitioning to ACTIVE state")
-                return ACTIVE  # User is fully set up
-            else:
-                logger.info(f"Пользователь {user_id} зарегистрирован, но курс не активирован.")
-                await safe_reply(update, context, f"{full_name}, для активации курса, введите кодовое слово:")
-                return WAIT_FOR_CODE  # Ask for the code word
-        else:
-            logger.info(f"Пользователь {user_id} зарегистрирован, но имя отсутствует.")
-            await safe_reply(update, context, "Пожалуйста, введите ваше имя:")
-            logger.info(f"User {update.effective_user.id} transitioning to WAIT_FOR_NAME state")
-            return WAIT_FOR_NAME  # Ask for the name
-    else:
-        # TODO исправить ошибку username нету есть full_name
-        # CREATE   TABLE  IF  NOT   EXISTS
-        # users( user_id   INTEGER   PRIMARY        KEY,
-        # full_name   TEXT        NOT   NULL    DEFAULT      'ЧЕБУРАШКА',
-        cursor.execute("INSERT INTO users (user_id, username, reg_date) VALUES (?, ?, ?)",
-                       (user_id, update.effective_user.username, datetime.now()))
-        conn.commit()
-        logger.info(f"Новый пользователь {user_id} - запрашиваем имя")
-        await safe_reply(update, context, "Привет! Пожалуйста, введите ваше имя:")
-        logger.info(f"User {update.effective_user.id} transitioning to WAIT_FOR_NAME state")
-        return WAIT_FOR_NAME  # Ask for the name
 
 #18-03 17-10 Perplexity
 @handle_telegram_errors
@@ -1675,7 +1432,8 @@ async def course_completion_actions( update: Update,  context: CallbackContext):
     # Get active_course_id from user
     cursor.execute("SELECT active_course_id FROM users WHERE user_id = ?", (user_id,))
     active_course_data = cursor.fetchone()
-    active_course_id_full = active_course_data[0]
+    if active_course_data:
+        active_course_id_full = active_course_data[0]
     # Inform user
     await update.message.reply_text("Congratulations, you have finished the course")
 
@@ -1768,11 +1526,13 @@ async def get_homework_status_text( user_id, course_id):
             (user_id, course_id),
         )
         progress_data = cursor.fetchone()
+        logger.info(f"2234 get_homework_status_text  {progress_data=}  ")
         if progress_data:
             lesson = progress_data[0]
-            return f"Жду домашку к {lesson} уроку"
+
         else:
-            return "Информация о прогрессе недоступна"
+            lesson = 1
+        return f"Жду домашку к {lesson} уроку"
 
     hw_id, lesson, status = homework_data
     logger.info(f"224 внутри get_homework_status_text  {hw_id=}  {lesson=}  {status=} ")
@@ -5034,7 +4794,13 @@ async def approve_homework(update: Update, context: CallbackContext):
                 "message_id": 1,
             }
         }
-        fake_update = Update.de_json(fake_update_data, context.bot)
+        logger.info(f" 213 перед fake_update ")
+        #fake_update = Update.de_json(fake_update_data, context.bot)
+        fake_update = Update(update_id=int(time.time()), message=None)
+        fake_update._effective_user = update.effective_user
+        fake_update._effective_chat = update.effective_chat
+        await show_main_menu(fake_update, context)
+
         logger.info(f" 2121212 перед show_main_menu {fake_update=} {context=}")
         await show_main_menu(fake_update, context)
 
