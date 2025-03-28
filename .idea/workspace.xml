@@ -1,0 +1,614 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="dd95a22e-7a02-4601-b83b-039ebddc32f0" name="Changes" comment="before triumph">
+      <change beforePath="$PROJECT_DIR$/__init__.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/about.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/bot_data.pkl" beforeDir="false" afterPath="$PROJECT_DIR$/bot_data.pkl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/bot_db.sqlite" beforeDir="false" afterPath="$PROJECT_DIR$/bot_db.sqlite" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/courses_old.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main-ADMIN_GROUP_ID.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main1522_1003.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main22.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main222.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main33.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main44.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main_oldmenu_work.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main_trae000.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/mainбяда с обработчиками.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/oldmain.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/perplexity-buffer.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pytest.ini" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/qwen-buffer.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/qwen-buffer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/readme.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/save_homme.py" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ChangesViewManager">
+    <option name="groupingKeys">
+      <option value="directory" />
+    </option>
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <favorite-branches>
+      <branch-storage>
+        <map>
+          <entry type="LOCAL">
+            <value>
+              <list>
+                <branch-info repo="$PROJECT_DIR$" source="old_big" />
+              </list>
+            </value>
+          </entry>
+        </map>
+      </branch-storage>
+    </favorite-branches>
+    <option name="PUSH_AUTO_UPDATE" value="true" />
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="master" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="UPDATE_TYPE" value="REBASE" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;andrjur&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/andrjur/AntonyBot.git&quot;,
+    &quot;accountId&quot;: &quot;c88ceef2-0125-4077-97df-3596ac8276bf&quot;
+  }
+}</component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/utils.py" root0="SKIP_HIGHLIGHTING" />
+  </component>
+  <component name="ProblemsViewState">
+    <hideBySeverity>
+      <option value="11" />
+      <option value="12" />
+      <option value="13" />
+      <option value="14" />
+      <option value="15" />
+      <option value="16" />
+      <option value="200" />
+    </hideBySeverity>
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 0
+}</component>
+  <component name="ProjectId" id="2u5mGWU9uPvtKIm9LJwadZSnW33" />
+  <component name="ProjectLevelVcsManager" settingsEditedManually="true">
+    <OptionsSetting value="false" id="Update" />
+    <ConfirmationsSetting value="2" id="Add" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Python.conversation_manager.executor": "Run",
+    "Python.course_manager.executor": "Run",
+    "Python.main.executor": "Run",
+    "Python.main12-03night.executor": "Run",
+    "Python.main1522_1003.executor": "Run",
+    "Python.main22.executor": "Run",
+    "Python.mainбяда с обработчиками.executor": "Run",
+    "Python.menu_manager.executor": "Run",
+    "Python.micro_util.executor": "Run",
+    "Python.oldmain.executor": "Run",
+    "Python.utils.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "59bd0208",
+    "last_opened_file_path": "C:/Mentor/botAntony/main.py",
+    "settings.editor.selected.configurable": "org.intellij.sdk.settings.AppSettingsConfigurable",
+    "two.files.diff.last.used.file": "C:/Mentor/botAntony/main.py"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Mentor\botAntony" />
+      <recent name="C:\Mentor\botAntony\lessons" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Mentor\botAntony\courses" />
+      <recent name="C:\Mentor\botAntony" />
+    </key>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-a5bc9544c897-aa17d162503b-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-243.23654.177" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="dd95a22e-7a02-4601-b83b-039ebddc32f0" name="Changes" comment="" />
+      <created>1741546713986</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1741546713986</updated>
+    </task>
+    <task id="LOCAL-00001" summary="init. with Qwen 1 hour work">
+      <option name="closed" value="true" />
+      <created>1741548786058</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1741548786058</updated>
+    </task>
+    <task id="LOCAL-00002" summary="add readme">
+      <option name="closed" value="true" />
+      <created>1741549127743</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1741549127743</updated>
+    </task>
+    <task id="LOCAL-00003" summary="add 1 lesson">
+      <option name="closed" value="true" />
+      <created>1741551448724</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1741551448724</updated>
+    </task>
+    <task id="LOCAL-00004" summary="work. hour with perplexity">
+      <option name="closed" value="true" />
+      <created>1741559948619</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1741559948619</updated>
+    </task>
+    <task id="LOCAL-00005" summary="normal base version perplexity limit of tokens">
+      <option name="closed" value="true" />
+      <created>1741607169224</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1741607169224</updated>
+    </task>
+    <task id="LOCAL-00006" summary="2 hours later">
+      <option name="closed" value="true" />
+      <created>1741615058307</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1741615058307</updated>
+    </task>
+    <task id="LOCAL-00007" summary="many fixes">
+      <option name="closed" value="true" />
+      <created>1741641436467</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1741641436467</updated>
+    </task>
+    <task id="LOCAL-00008" summary="hmmmmm">
+      <option name="closed" value="true" />
+      <created>1741642775725</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1741642775725</updated>
+    </task>
+    <task id="LOCAL-00009" summary="it breathes">
+      <option name="closed" value="true" />
+      <created>1741644849327</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1741644849327</updated>
+    </task>
+    <task id="LOCAL-00010" summary="before big refactor">
+      <option name="closed" value="true" />
+      <created>1741710824967</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1741710824967</updated>
+    </task>
+    <task id="LOCAL-00011" summary="after. State mashine, simple. deepseek">
+      <option name="closed" value="true" />
+      <created>1741720706483</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1741720706483</updated>
+    </task>
+    <task id="LOCAL-00012" summary="big work">
+      <option name="closed" value="true" />
+      <created>1741725421777</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1741725421777</updated>
+    </task>
+    <task id="LOCAL-00013" summary="big work 2">
+      <option name="closed" value="true" />
+      <created>1741743433861</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1741743433861</updated>
+    </task>
+    <task id="LOCAL-00014" summary="big work 2">
+      <option name="closed" value="true" />
+      <created>1741743447551</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1741743447551</updated>
+    </task>
+    <task id="LOCAL-00015" summary="before big refactor">
+      <option name="closed" value="true" />
+      <created>1741770630193</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1741770630193</updated>
+    </task>
+    <task id="LOCAL-00016" summary="ше alive">
+      <option name="closed" value="true" />
+      <created>1741794567712</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1741794567712</updated>
+    </task>
+    <task id="LOCAL-00017" summary="add shop">
+      <option name="closed" value="true" />
+      <created>1741821911923</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1741821911923</updated>
+    </task>
+    <task id="LOCAL-00018" summary="some fix">
+      <option name="closed" value="true" />
+      <created>1741863552467</created>
+      <option name="number" value="00018" />
+      <option name="presentableId" value="LOCAL-00018" />
+      <option name="project" value="LOCAL" />
+      <updated>1741863552467</updated>
+    </task>
+    <task id="LOCAL-00019" summary="before regular in button_handler">
+      <option name="closed" value="true" />
+      <created>1741893892396</created>
+      <option name="number" value="00019" />
+      <option name="presentableId" value="LOCAL-00019" />
+      <option name="project" value="LOCAL" />
+      <updated>1741893892396</updated>
+    </task>
+    <task id="LOCAL-00020" summary="alpha 0.0.1 version with manualpay">
+      <option name="closed" value="true" />
+      <created>1741901473725</created>
+      <option name="number" value="00020" />
+      <option name="presentableId" value="LOCAL-00020" />
+      <option name="project" value="LOCAL" />
+      <updated>1741901473725</updated>
+    </task>
+    <task id="LOCAL-00021" summary="with handle_homework_submission invalid">
+      <option name="closed" value="true" />
+      <created>1741941963495</created>
+      <option name="number" value="00021" />
+      <option name="presentableId" value="LOCAL-00021" />
+      <option name="project" value="LOCAL" />
+      <updated>1741941963495</updated>
+    </task>
+    <task id="LOCAL-00022" summary="add pytest">
+      <option name="closed" value="true" />
+      <created>1741985992679</created>
+      <option name="number" value="00022" />
+      <option name="presentableId" value="LOCAL-00022" />
+      <option name="project" value="LOCAL" />
+      <updated>1741985992679</updated>
+    </task>
+    <task id="LOCAL-00023" summary="before qwen opt">
+      <option name="closed" value="true" />
+      <created>1742019201143</created>
+      <option name="number" value="00023" />
+      <option name="presentableId" value="LOCAL-00023" />
+      <option name="project" value="LOCAL" />
+      <updated>1742019201143</updated>
+    </task>
+    <task id="LOCAL-00024" summary="in depth qwen opt">
+      <option name="closed" value="true" />
+      <created>1742019800181</created>
+      <option name="number" value="00024" />
+      <option name="presentableId" value="LOCAL-00024" />
+      <option name="project" value="LOCAL" />
+      <updated>1742019800181</updated>
+    </task>
+    <task id="LOCAL-00025" summary="in depth qwen opt">
+      <option name="closed" value="true" />
+      <created>1742022640046</created>
+      <option name="number" value="00025" />
+      <option name="presentableId" value="LOCAL-00025" />
+      <option name="project" value="LOCAL" />
+      <updated>1742022640046</updated>
+    </task>
+    <task id="LOCAL-00026" summary="туц readme">
+      <option name="closed" value="true" />
+      <created>1742022772040</created>
+      <option name="number" value="00026" />
+      <option name="presentableId" value="LOCAL-00026" />
+      <option name="project" value="LOCAL" />
+      <updated>1742022772040</updated>
+    </task>
+    <task id="LOCAL-00027" summary="add coins">
+      <option name="closed" value="true" />
+      <created>1742069979664</created>
+      <option name="number" value="00027" />
+      <option name="presentableId" value="LOCAL-00027" />
+      <option name="project" value="LOCAL" />
+      <updated>1742069979664</updated>
+    </task>
+    <task id="LOCAL-00028" summary="before Trae">
+      <option name="closed" value="true" />
+      <created>1742105131925</created>
+      <option name="number" value="00028" />
+      <option name="presentableId" value="LOCAL-00028" />
+      <option name="project" value="LOCAL" />
+      <updated>1742105131925</updated>
+    </task>
+    <task id="LOCAL-00029" summary="fix all errors and orange warnings">
+      <option name="closed" value="true" />
+      <created>1742110163289</created>
+      <option name="number" value="00029" />
+      <option name="presentableId" value="LOCAL-00029" />
+      <option name="project" value="LOCAL" />
+      <updated>1742110163289</updated>
+    </task>
+    <task id="LOCAL-00030" summary="fix many errors in pyCharm-Perplexity">
+      <option name="closed" value="true" />
+      <created>1742126181893</created>
+      <option name="number" value="00030" />
+      <option name="presentableId" value="LOCAL-00030" />
+      <option name="project" value="LOCAL" />
+      <updated>1742126181893</updated>
+    </task>
+    <task id="LOCAL-00031" summary="broken menu">
+      <option name="closed" value="true" />
+      <created>1742133415772</created>
+      <option name="number" value="00031" />
+      <option name="presentableId" value="LOCAL-00031" />
+      <option name="project" value="LOCAL" />
+      <updated>1742133415772</updated>
+    </task>
+    <task id="LOCAL-00032" summary="refactor safe_send and add coins!">
+      <option name="closed" value="true" />
+      <created>1742212312237</created>
+      <option name="number" value="00032" />
+      <option name="presentableId" value="LOCAL-00032" />
+      <option name="project" value="LOCAL" />
+      <updated>1742212312237</updated>
+    </task>
+    <task id="LOCAL-00033" summary="confusion handlers. bad version">
+      <option name="closed" value="true" />
+      <created>1742230604765</created>
+      <option name="number" value="00033" />
+      <option name="presentableId" value="LOCAL-00033" />
+      <option name="project" value="LOCAL" />
+      <updated>1742230604765</updated>
+    </task>
+    <task id="LOCAL-00034" summary="small step forward">
+      <option name="closed" value="true" />
+      <created>1742241695031</created>
+      <option name="number" value="00034" />
+      <option name="presentableId" value="LOCAL-00034" />
+      <option name="project" value="LOCAL" />
+      <updated>1742241695031</updated>
+    </task>
+    <task id="LOCAL-00035" summary="small step forward 2">
+      <option name="closed" value="true" />
+      <created>1742278267916</created>
+      <option name="number" value="00035" />
+      <option name="presentableId" value="LOCAL-00035" />
+      <option name="project" value="LOCAL" />
+      <updated>1742278267916</updated>
+    </task>
+    <task id="LOCAL-00036" summary="small step forward 2">
+      <option name="closed" value="true" />
+      <created>1742278310865</created>
+      <option name="number" value="00036" />
+      <option name="presentableId" value="LOCAL-00036" />
+      <option name="project" value="LOCAL" />
+      <updated>1742278310865</updated>
+    </task>
+    <task id="LOCAL-00037" summary="small step forward 3">
+      <option name="closed" value="true" />
+      <created>1742278458491</created>
+      <option name="number" value="00037" />
+      <option name="presentableId" value="LOCAL-00037" />
+      <option name="project" value="LOCAL" />
+      <updated>1742278458491</updated>
+    </task>
+    <task id="LOCAL-00038" summary="small step forward 4">
+      <option name="closed" value="true" />
+      <created>1742278762660</created>
+      <option name="number" value="00038" />
+      <option name="presentableId" value="LOCAL-00038" />
+      <option name="project" value="LOCAL" />
+      <updated>1742278762660</updated>
+    </task>
+    <task id="LOCAL-00039" summary="small step forward 5 - PLATO">
+      <option name="closed" value="true" />
+      <created>1742290832737</created>
+      <option name="number" value="00039" />
+      <option name="presentableId" value="LOCAL-00039" />
+      <option name="project" value="LOCAL" />
+      <updated>1742290832737</updated>
+    </task>
+    <task id="LOCAL-00040" summary="small step forward 6">
+      <option name="closed" value="true" />
+      <created>1742307568444</created>
+      <option name="number" value="00040" />
+      <option name="presentableId" value="LOCAL-00040" />
+      <option name="project" value="LOCAL" />
+      <updated>1742307568444</updated>
+    </task>
+    <task id="LOCAL-00041" summary="Big step forward 7. utils datadase">
+      <option name="closed" value="true" />
+      <created>1742335335821</created>
+      <option name="number" value="00041" />
+      <option name="presentableId" value="LOCAL-00041" />
+      <option name="project" value="LOCAL" />
+      <updated>1742335335821</updated>
+    </task>
+    <task id="LOCAL-00042" summary="next iter">
+      <option name="closed" value="true" />
+      <created>1742492818870</created>
+      <option name="number" value="00042" />
+      <option name="presentableId" value="LOCAL-00042" />
+      <option name="project" value="LOCAL" />
+      <updated>1742492818870</updated>
+    </task>
+    <task id="LOCAL-00043" summary="before menuManager update">
+      <option name="closed" value="true" />
+      <created>1742560371457</created>
+      <option name="number" value="00043" />
+      <option name="presentableId" value="LOCAL-00043" />
+      <option name="project" value="LOCAL" />
+      <updated>1742560371457</updated>
+    </task>
+    <task id="LOCAL-00044" summary="decorator db_handler">
+      <option name="closed" value="true" />
+      <created>1742639591958</created>
+      <option name="number" value="00044" />
+      <option name="presentableId" value="LOCAL-00044" />
+      <option name="project" value="LOCAL" />
+      <updated>1742639591958</updated>
+    </task>
+    <task id="LOCAL-00045" summary="end of multifile">
+      <option name="closed" value="true" />
+      <created>1742880139969</created>
+      <option name="number" value="00045" />
+      <option name="presentableId" value="LOCAL-00045" />
+      <option name="project" value="LOCAL" />
+      <updated>1742880139969</updated>
+    </task>
+    <task id="LOCAL-00046" summary="renew 1 biiig file">
+      <option name="closed" value="true" />
+      <created>1742895909599</created>
+      <option name="number" value="00046" />
+      <option name="presentableId" value="LOCAL-00046" />
+      <option name="project" value="LOCAL" />
+      <updated>1742895909599</updated>
+    </task>
+    <task id="LOCAL-00047" summary="small step to bot - big step of hummunity">
+      <option name="closed" value="true" />
+      <created>1742904852463</created>
+      <option name="number" value="00047" />
+      <option name="presentableId" value="LOCAL-00047" />
+      <option name="project" value="LOCAL" />
+      <updated>1742904852463</updated>
+    </task>
+    <task id="LOCAL-00048" summary="before triumph">
+      <option name="closed" value="true" />
+      <created>1743162914053</created>
+      <option name="number" value="00048" />
+      <option name="presentableId" value="LOCAL-00048" />
+      <option name="project" value="LOCAL" />
+      <updated>1743162914053</updated>
+    </task>
+    <option name="localTasksCounter" value="49" />
+    <servers />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="RECENT_FILTERS">
+      <map>
+        <entry key="Branch">
+          <value>
+            <list>
+              <RecentGroup>
+                <option name="FILTER_VALUES">
+                  <option value="HEAD" />
+                </option>
+              </RecentGroup>
+              <RecentGroup>
+                <option name="FILTER_VALUES">
+                  <option value="master" />
+                </option>
+              </RecentGroup>
+            </list>
+          </value>
+        </entry>
+      </map>
+    </option>
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="HEAD" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="in depth qwen opt" />
+    <MESSAGE value="туц readme" />
+    <MESSAGE value="add coins" />
+    <MESSAGE value="before Trae" />
+    <MESSAGE value="fix all errors and orange warnings" />
+    <MESSAGE value="fix many errors in pyCharm-Perplexity" />
+    <MESSAGE value="broken menu" />
+    <MESSAGE value="add old menu" />
+    <MESSAGE value="refactor safe_send and add coins!" />
+    <MESSAGE value="confusion handlers. bad version" />
+    <MESSAGE value="small step forward" />
+    <MESSAGE value="small step forward 2" />
+    <MESSAGE value="small step forward 3" />
+    <MESSAGE value="small step forward 4" />
+    <MESSAGE value="small step forward 5 - PLATO" />
+    <MESSAGE value="small step forward 6" />
+    <MESSAGE value="Big step forward 7. utils datadase" />
+    <MESSAGE value="next iter" />
+    <MESSAGE value="before menuManager update" />
+    <MESSAGE value="decorator db_handler" />
+    <MESSAGE value="end of multifile" />
+    <MESSAGE value="renew 1 biiig file" />
+    <MESSAGE value="small step to bot - big step of hummunity" />
+    <MESSAGE value="small 2 step to bot" />
+    <MESSAGE value="before triumph" />
+    <option name="LAST_COMMIT_MESSAGE" value="before triumph" />
+  </component>
+</project>

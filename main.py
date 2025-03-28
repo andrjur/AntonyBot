@@ -1259,58 +1259,60 @@ async def show_main_menu( update: Update, context: CallbackContext):
         else:
             course_type, progress = course_data
 
-        logger.info(f"436 Тип курса: {course_type=} Прогресс: {progress=} ------ ")
-        logger.info(f"437 {course_type=} {progress=} ------ ")
-
-        # Notifications
-        cursor.execute(
-            "SELECT morning_notification, evening_notification FROM user_settings WHERE user_id = ?",
-            (user.id,),
-        )
-        settings = cursor.fetchone()
-
-        logger.info(f"438 Настройки уведомлений:  {settings=}  ------- ")
-        morning_time = settings[0] if settings and len(settings) > 0 else "Not set"  # CHECK LENGHT
-        evening_time = settings[1] if settings and len(settings) > 1 else "Not set"  # CHECK LENGHT
-
-        # Получаем имя пользователя
-        cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user.id,))
-        name_data = cursor.fetchone()
-        logger.info(f"439 Имя пользователя:  {name_data=}  -------- ")
-
-        logger.info(f"440 {settings=}  ------- ")
-        morning_time = settings[0] if settings and len(settings) > 0 else "Not set"  # CHECK LENGHT
-        evening_time = settings[1] if settings and len(settings) > 1 else "Not set"  # CHECK LENGHT
-
-        # Get username
-        cursor.execute("SELECT full_name FROM users WHERE user_id = ?", (user.id,))
-        name_data = cursor.fetchone()
-        logger.info(f" 441 {name_data=}  -------- ")
-
-        if name_data and len(name_data) > 0:
-            full_name = name_data[0]
-        else:
-            full_name = "Пользователь"
-            logger.warning(f"442 Не найдено имя пользователя {user.id} в базе данных")
-        logger.info(f"443 {full_name=}  --------- ")
-
-        # Получаем статус домашнего задания
-        homework = await get_homework_status_text(user.id, active_course_id_full)
-
-        logger.info(f"4424 --- {homework=}  --------- ")
-
-        lesson_files = await get_lesson_files(user.id, progress, active_course_id)
-        logger.info(f"445 lesson_files = {lesson_files[:3]}  -=- ")
-
-        # Removing this as it should happen only on "lesson" button press
-        # last_lesson = await check_last_lesson (update, context)
-        # logger.info(f" {last_lesson=}  --------- ")
-
         # Debug state
         if context.user_data and context.user_data.get("waiting_for_code"):
             state_emoji = "🔑"  # Key emoji for 'waiting_for_code' state
         else:
             state_emoji = "✅"  # Checkmark for other states
+
+        # Формируем меню в зависимости от наличия курса и прогресса
+        if course_data:
+            course_type, progress = course_data
+            logger.info(f"436 Тип курса: {course_type=} Прогресс: {progress=} ------ ")
+            logger.info(f"437 {course_type=} {progress=} ------ ")
+            cursor.execute("SELECT settings FROM user_settings WHERE user_id = ?", (user_id,))
+            settings_data = cursor.fetchone()
+            logger.info(f"438 Настройки уведомлений:  {settings_data=} ------- ")
+
+            cursor.execute("SELECT name FROM users WHERE user_id = ?", (user_id,))
+            name_data = cursor.fetchone()
+            logger.info(f"439 Имя пользователя:  {name_data=} -------- ")
+            settings = settings_data[0] if settings_data else None
+            logger.info(f"440 {settings=} ------- ")
+            name_data = cursor.execute("SELECT name FROM users WHERE user_id = ?", (user_id,)).fetchone()
+            logger.info(f" 441 {name_data=} -------- ")
+
+            full_name = name_data[0] if name_data else "Пользователь"
+            logger.info(f"443 {full_name=} --------- ")
+
+            # Получаем статус домашки и формируем текст
+            homework_status = await get_homework_status_text(user_id, progress)
+            logger.info(f"444 homework={homework_status=} --------- ")
+
+            # Calculate next lesson time
+            next_lesson_time = datetime.now() + timedelta(hours=DEFAULT_LESSON_INTERVAL)
+            formatted_next_lesson_time = next_lesson_time.strftime("%d-%m-%Y %H:%M")
+
+            # Combine homework status and next lesson time
+            homework_and_next_lesson = f"{homework_status}  \nСледующий урок в {formatted_next_lesson_time} "
+
+            # Получаем файлы урока
+            lesson_dir = f"courses\\{active_course_id}"
+            lesson_files = get_lesson_files(user_id, progress, lesson_dir)  # исправил на await
+
+            main_menu_text = f"Приветствую, {full_name}! {state_emoji}\n" \
+                             f"        Курс: {active_course_id} (main) premium\n" \
+                             f"        Прогресс: Текущий урок: {progress}\n" \
+                             f"        Домашка: {homework_and_next_lesson}   \n" \
+                             f" {PLATINUM_COIN}AntCoins{PLATINUM_COIN} {tokens}  =      {coins_display}"
+
+            lesson_files = await get_lesson_files(user_id, progress, lesson_dir)
+            logger.info(f"445 lesson_files = {lesson_files}  -=- ")
+
+        else:
+            main_menu_text = "Чтобы начать обучение, активируйте курс с помощью кодового слова."
+
+
 
         progress_text = f"Текущий урок: {progress}" if progress else "--"
         greeting = f"""Приветствую, {full_name.split()[0]}! {state_emoji}
