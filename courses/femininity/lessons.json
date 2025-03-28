@@ -1,0 +1,46 @@
+[
+  {
+    "lesson": 1,
+    "lesson_name": "Введение",
+    "description": "Первый урок курса",
+    "content": [
+      {
+        "type": "video",
+        "url": "https://example.com/video1.mp4",
+        "file_id": "BAACAgIAAxkBAAIabcdeFGhijk1234567890abcdefg",
+        "caption": "Вводное видео"
+      },
+      {
+        "type": "photo",
+        "url": "https://example.com/image1.jpg",
+        "file_id": "AgACAgIAAxkBAAIefghiJKLmnop34567890abcdefgh",
+        "caption": "Схема курса"
+      },
+      {
+        "type": "video",
+        "url": "https://example.com/video2.mp4",
+        "file_id": "CAACAgIAAxkBAAIjklmnOPqrstu567890abcdefghi",
+        "caption": "Дополнительное видео"
+      }
+    ]
+  },
+  {
+    "lesson": 2,
+    "lesson_name": "Основы",
+    "description": "Второй урок курса",
+    "content": [
+      {
+        "type": "video",
+        "url": "https://example.com/video3.mp4",
+        "file_id": "DAACAgIAAxkBAAIpqrstUVwxyz7890abcdefghij",
+        "caption": "Основное видео урока"
+      },
+      {
+        "type": "photo",
+        "url": "https://example.com/image2.jpg",
+        "file_id": "AgACAgIAAxkBAAIuvwxyzABCdef890abcdefghijk",
+        "caption": "Иллюстрация к уроку"
+      }
+    ]
+  }
+]
